@@ -21,6 +21,21 @@ uv run uvicorn rastro_api.main:app --reload
 PROCRASTINATE_APP=rastro_worker.app.app uv run procrastinate worker
 ```
 
+Capture a session for a commit (phase 3). Until the GitHub App creates repositories (phase 4), issue a
+repository token by hand and point the CLI at the API:
+
+```bash
+uv run python -m rastro_api.admin issue-token --github-id 1 --full-name owner/repo   # prints the token once
+cd /path/to/your/repo
+rastro init --api-url http://localhost:8000     # prompts for the token, installs the post-commit hook
+git commit ...                                  # the hook runs `rastro capture`, which returns immediately
+rastro flush                                    # resend captures that could not be uploaded
+```
+
+The token goes to the system keychain (or `RASTRO_TOKEN` on headless machines), never to `.rastro/config.json`.
+Captures wait in `.rastro/pending/` (git-ignored through `.git/info/exclude`) until the upload succeeds;
+failures are logged to `.rastro/capture.log`.
+
 Checks (the same ones CI runs):
 
 ```bash

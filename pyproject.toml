@@ -22,6 +22,8 @@ rastro-db = { workspace = true }
 rastro-api = { workspace = true }
 rastro-worker = { workspace = true }
 rastro-code-analysis = { workspace = true }
+rastro-session-parsers = { workspace = true }
+rastro-cli = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -30,16 +32,18 @@ extend-exclude = ["fixtures", "packages/db/migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
+ignore = ["E501"]  # line length is handled by ruff format
 
 [tool.ruff.lint.isort]
-known-first-party = ["rastro_api", "rastro_code_analysis", "rastro_db", "rastro_worker"]
+known-first-party = ["rastro_api", "rastro_cli", "rastro_code_analysis", "rastro_db", "rastro_session_parsers", "rastro_worker"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
-exclude = ["fixtures/", "migrations/"]
-mypy_path = "apps/api/src:apps/worker/src:packages/db/src:packages/code_analysis/src"
+# Two conftest.py files would clash as module "conftest"; the cli one is excluded.
+exclude = ["fixtures/", "migrations/", "packages/cli/tests/conftest.py"]
+mypy_path = "apps/api/src:apps/worker/src:packages/db/src:packages/code_analysis/src:packages/session_parsers/src:packages/cli/src:apps/api/tests:packages/cli/tests"
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]

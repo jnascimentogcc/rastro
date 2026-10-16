@@ -1,0 +1,100 @@
+from typing import Any
+
+import pytest
+from api_support import ApiContext
+from sqlalchemy import select
+
+from rastro_db import create_session_factory
+from rastro_db.models import AgentSession
+
+pytestmark = pytest.mark.db
+
+PAYLOAD: dict[str, Any] = {
+    "commit_sha": "A" * 40,
+    "session_ref": "sess-1",
+    "agent": "claude-code",
+    "agent_version": "2.1.288",
+    "git_branch": "main",
+    "excerpts": [
+        {
+            "role": "user",
+            "kind": "intent",
+            "text": "Implants cannot be booked on Friday afternoon",
+            "timestamp": "2026-10-01T10:00:00.000Z",
+            "files": ["src/agenda.ts"],
+        }
+    ],
+}
+
+
+def auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def test_whoami_with_valid_token(api: ApiContext) -> None:
+    response = await api.client.get("/v1/auth/whoami", headers=auth(api.token))
+
+    assert response.status_code == 200
+    assert response.json()["full_name"] == "acme/clinic"
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer rst_wrong"}])
+async def test_missing_or_wrong_token_is_rejected(api: ApiContext, headers: dict[str, str]) -> None:
+    for method, url in (("GET", "/v1/auth/whoami"), ("POST", "/v1/sessions")):
+        response = await api.client.request(method, url, headers=headers, json=PAYLOAD)
+        assert response.status_code == 401
+        assert response.headers["www-authenticate"] == "Bearer"
+
+
+async def test_capture_is_stored_and_sha_is_lowercased(api: ApiContext) -> None:
+    response = await api.client.post("/v1/sessions", json=PAYLOAD, headers=auth(api.token))
+
+    assert response.status_code == 201
+    assert response.json()["created"] is True
+    factory = create_session_factory(api.engine)
+    async with factory() as session:
+        stored = (
+            await session.scalars(
+                select(AgentSession).where(AgentSession.repository_id == api.repository_id)
+            )
+        ).one()
+    assert stored.commit_sha == "a" * 40
+    assert stored.agent_version == "2.1.288"
+    assert stored.excerpts[0]["kind"] == "intent"
+
+
+async def test_resending_the_same_capture_replaces_it(api: ApiContext) -> None:
+    first = await api.client.post("/v1/sessions", json=PAYLOAD, headers=auth(api.token))
+    changed = {
+        **PAYLOAD,
+        "excerpts": [*PAYLOAD["excerpts"], {**PAYLOAD["excerpts"][0], "kind": "context"}],
+    }
+    second = await api.client.post("/v1/sessions", json=changed, headers=auth(api.token))
+
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+    assert second.json()["created"] is False
+    assert second.json()["excerpts"] == 2
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"commit_sha": "not-a-sha"},
+        {"session_ref": ""},
+        {"excerpts": [{"role": "system", "kind": "intent", "text": "x", "timestamp": "t"}]},
+        {"excerpts": [{"role": "user", "kind": "intent", "text": "x" * 150_000, "timestamp": "t"}]},
+        {
+            "excerpts": [
+                {"role": "user", "kind": "context", "text": "x" * 19_000, "timestamp": "t"}
+            ]
+            * 11
+        },
+    ],
+)
+async def test_invalid_payloads_are_rejected(api: ApiContext, patch: dict[str, object]) -> None:
+    response = await api.client.post(
+        "/v1/sessions", json={**PAYLOAD, **patch}, headers=auth(api.token)
+    )
+
+    assert response.status_code == 422
