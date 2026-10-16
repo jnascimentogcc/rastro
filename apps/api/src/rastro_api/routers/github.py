@@ -17,20 +17,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from rastro_api.deps import DbSession
+from rastro_api.queueing import enqueue
 from rastro_db.models import Commit, Repository
 from rastro_github import GitHubSettings, verify_signature
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["github"])
-
-
-async def enqueue(
-    queue: procrastinate.App, task: str, repository_id: uuid.UUID, **arguments: Any
-) -> None:
-    """Jobs of one repository run one at a time (`lock`), so symbol upserts cannot race."""
-    await queue.configure_task(name=task, lock=str(repository_id)).defer_async(
-        repository_id=str(repository_id), **arguments
-    )
 
 
 @router.post("/webhooks/github", status_code=status.HTTP_202_ACCEPTED)

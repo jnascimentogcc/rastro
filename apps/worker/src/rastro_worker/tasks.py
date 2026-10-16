@@ -2,16 +2,14 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from functools import wraps
-from typing import ParamSpec
 
 from githubkit.exception import GitHubException, RequestFailed
 
-from rastro_worker import indexing
+from rastro_worker import indexing, rule_extraction
 from rastro_worker.app import app
 from rastro_worker.deps import get_deps
 
 logger = logging.getLogger(__name__)
-P = ParamSpec("P")
 
 
 def log_github_errors[**P](task: Callable[P, Awaitable[None]]) -> Callable[P, Awaitable[None]]:
@@ -54,4 +52,17 @@ async def index_repository(repository_id: str) -> None:
 @app.task(name="analyze_commit")
 @log_github_errors
 async def analyze_commit(repository_id: str, sha: str, on_default_branch: bool = False) -> None:
-    await indexing.analyze_commit(get_deps(), uuid.UUID(repository_id), sha, on_default_branch)
+    summary = await indexing.analyze_commit(
+        get_deps(), uuid.UUID(repository_id), sha, on_default_branch
+    )
+    if summary.get("sessions"):
+        await extract_rules.configure(lock=repository_id).defer_async(
+            repository_id=repository_id, sha=sha
+        )
+
+
+@app.task(name="rule_extraction")
+@log_github_errors
+async def extract_rules(repository_id: str, sha: str, force: bool = False) -> None:
+    """Rule extraction for one commit; `analyze_commit` and late session uploads queue it."""
+    await rule_extraction.extract_rules(get_deps(), uuid.UUID(repository_id), sha, force=force)

@@ -24,3 +24,4 @@ class ChangedFile:
     status: ChangeStatus
     blob_sha: str | None = None  # None for removed files
     previous_path: str | None = None  # set for renames
+    patch: str | None = None  # unified diff; None for binary or very large changes

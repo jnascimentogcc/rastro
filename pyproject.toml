@@ -25,6 +25,7 @@ rastro-code-analysis = { workspace = true }
 rastro-session-parsers = { workspace = true }
 rastro-cli = { workspace = true }
 rastro-github = { workspace = true }
+rastro-llm = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -36,7 +37,7 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
 ignore = ["E501"]  # line length is handled by ruff format
 
 [tool.ruff.lint.isort]
-known-first-party = ["rastro_api", "rastro_cli", "rastro_code_analysis", "rastro_db", "rastro_github", "rastro_session_parsers", "rastro_worker"]
+known-first-party = ["rastro_api", "rastro_cli", "rastro_code_analysis", "rastro_db", "rastro_github", "rastro_llm", "rastro_session_parsers", "rastro_worker"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -44,7 +45,7 @@ strict = true
 plugins = ["pydantic.mypy"]
 # Several conftest.py files would clash as module "conftest", so none is type-checked.
 exclude = ['fixtures/', 'migrations/', 'conftest.py$']
-mypy_path = "apps/api/src:apps/worker/src:packages/db/src:packages/code_analysis/src:packages/session_parsers/src:packages/cli/src:packages/github/src:apps/api/tests:apps/worker/tests:packages/cli/tests"
+mypy_path = "apps/api/src:apps/worker/src:packages/db/src:packages/code_analysis/src:packages/session_parsers/src:packages/cli/src:packages/github/src:packages/llm/src:apps/api/tests:apps/worker/tests:packages/cli/tests"
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]

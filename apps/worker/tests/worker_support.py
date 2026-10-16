@@ -1,3 +1,4 @@
+import difflib
 import uuid
 from dataclasses import dataclass
 
@@ -5,15 +6,24 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import aliased
 
-from rastro_db.models import Symbol, SymbolCall
-from rastro_github.testing import FakeGitHub
+from rastro_db.models import AgentSession, Commit, Rule, RuleAnchor, Symbol, SymbolCall
+from rastro_github import ChangedFile
+from rastro_github.testing import FakeGitHub, blob_sha
+from rastro_llm import FakeProvider
 from rastro_worker.deps import WorkerDeps
+
+
+def make_patch(old: str, new: str) -> str:
+    """Unified diff of two file versions in the shape GitHub returns (hunks only)."""
+    lines = difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=3)
+    return "\n".join(list(lines)[2:])
 
 
 @dataclass
 class WorkerContext:
     deps: WorkerDeps
     github: FakeGitHub
+    llm: FakeProvider
     repository_id: uuid.UUID
     full_name: str
     engine: AsyncEngine
@@ -40,3 +50,73 @@ class WorkerContext:
                 )
             )
             return {(s.file_path, s.qualified_name): s for s in rows}
+
+    async def rules(self) -> list[Rule]:
+        async with self.deps.session_factory() as session:
+            return list(
+                await session.scalars(
+                    select(Rule)
+                    .where(Rule.repository_id == self.repository_id)
+                    .order_by(Rule.created_at)
+                )
+            )
+
+    async def anchors(self, rule_id: uuid.UUID) -> dict[tuple[str, str], str]:
+        """(file, symbol) -> role for one rule."""
+        async with self.deps.session_factory() as session:
+            rows = await session.execute(
+                select(Symbol.file_path, Symbol.qualified_name, RuleAnchor.role)
+                .join(RuleAnchor, RuleAnchor.symbol_id == Symbol.id)
+                .where(RuleAnchor.rule_id == rule_id)
+            )
+            return {(path, name): role for path, name, role in rows}
+
+    async def commit(self, sha: str) -> Commit | None:
+        async with self.deps.session_factory() as session:
+            return await session.scalar(
+                select(Commit).where(Commit.repository_id == self.repository_id, Commit.sha == sha)
+            )
+
+    async def add_session(self, sha: str, excerpts: list[dict[str, object]]) -> uuid.UUID:
+        async with self.deps.session_factory() as session, session.begin():
+            row = AgentSession(
+                repository_id=self.repository_id,
+                commit_sha=sha,
+                session_ref=f"s-{uuid.uuid4().hex[:6]}",
+                excerpts=excerpts,
+            )
+            session.add(row)
+            await session.flush()
+            return row.id
+
+    async def add_commit_row(self, sha: str, message: str = "change") -> None:
+        async with self.deps.session_factory() as session, session.begin():
+            session.add(Commit(repository_id=self.repository_id, sha=sha, message=message))
+
+    def stage_commit(self, sha: str, files: dict[str, str], changes: dict[str, str | None]) -> None:
+        """Define the tree at `sha` and which files it modified. `changes` maps a path to the old
+        content (None = new file); the diff is computed against the new content in `files`."""
+        self.github.set_tree(self.full_name, sha, files)
+        self.github.add_commit(
+            self.full_name,
+            sha,
+            [
+                ChangedFile(
+                    path,
+                    "added" if old is None else "modified",
+                    blob_sha=blob_sha(files[path].encode()),
+                    patch=make_patch(old or "", files[path]),
+                )
+                for path, old in changes.items()
+            ],
+        )
+
+
+def user_excerpt(text: str, kind: str = "intent") -> dict[str, object]:
+    return {
+        "role": "user",
+        "kind": kind,
+        "text": text,
+        "timestamp": "2026-10-01T10:00:00.000Z",
+        "files": [],
+    }

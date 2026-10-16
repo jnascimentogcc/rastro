@@ -59,6 +59,8 @@ class Commit(Base):
     message: Mapped[str | None] = mapped_column(Text)
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # analyzed | analysis_failed | skipped_no_session | NULL (not analyzed yet)
+    analysis_status: Mapped[str | None] = mapped_column(Text)
 
 
 class AgentSession(Base):
@@ -170,4 +172,21 @@ class PrAnalysis(Base):
     head_sha: Mapped[str] = mapped_column(Text, nullable=False)
     comment_id: Mapped[int | None] = mapped_column(BigInteger)
     findings: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = _now()
+
+
+class LlmCall(Base):
+    """Every model call: which model, how many tokens, estimated cost (spec section 11)."""
+
+    __tablename__ = "llm_calls"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    repository_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("repositories.id", ondelete="SET NULL")
+    )
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_usd: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = _now()

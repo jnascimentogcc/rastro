@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Response, status
-from sqlalchemy import literal_column
+from fastapi import APIRouter, Request, Response, status
+from sqlalchemy import literal_column, select
 from sqlalchemy.dialects.postgresql import insert
 
 from rastro_api.deps import CurrentRepository, DbSession
+from rastro_api.queueing import enqueue
 from rastro_api.schemas import SessionCaptureIn, SessionCaptureOut
-from rastro_db.models import AgentSession
+from rastro_db.models import AgentSession, Commit
 
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 
@@ -12,6 +13,7 @@ router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 @router.post("", response_model=SessionCaptureOut, status_code=status.HTTP_201_CREATED)
 async def capture_session(
     payload: SessionCaptureIn,
+    request: Request,
     repository: CurrentRepository,
     session: DbSession,
     response: Response,
@@ -36,7 +38,17 @@ async def capture_session(
         },
     ).returning(AgentSession.id, literal_column("(xmax = 0)").label("created"))
     row = (await session.execute(statement)).one()
+    commit_known = await session.scalar(
+        select(Commit.id).where(
+            Commit.repository_id == repository.id, Commit.sha == payload.commit_sha
+        )
+    )
     await session.commit()
+    if commit_known is not None:
+        # The push webhook already arrived: extraction cannot wait for it, so queue it now.
+        await enqueue(
+            request.app.state.queue, "rule_extraction", repository.id, sha=payload.commit_sha
+        )
     if not row.created:
         response.status_code = status.HTTP_200_OK
     return SessionCaptureOut(

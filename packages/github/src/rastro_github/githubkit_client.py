@@ -102,6 +102,7 @@ class GithubKitClient:
                         status=status,
                         blob_sha=None if status == "removed" else item.sha,
                         previous_path=item.previous_filename or None,
+                        patch=item.patch or None,
                     )
                 )
             if len(files) < _COMMIT_FILES_PER_PAGE:
