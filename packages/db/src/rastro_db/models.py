@@ -36,12 +36,15 @@ def _now() -> Mapped[datetime]:
 
 class Repository(Base):
     __tablename__ = "repositories"
+    __table_args__ = (UniqueConstraint("api_token_hash", name="uq_repositories_api_token_hash"),)
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     github_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     full_name: Mapped[str] = mapped_column(Text, nullable=False)
     installation_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     default_branch: Mapped[str] = mapped_column(Text, nullable=False)
+    # SHA-256 of the repository API token used by the CLI (the token itself is never stored).
+    api_token_hash: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _now()
 
 
@@ -60,12 +63,19 @@ class Commit(Base):
 
 class AgentSession(Base):
     __tablename__ = "agent_sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "repository_id", "commit_sha", "session_ref", name="uq_agent_sessions_commit_session"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), nullable=False)
     commit_sha: Mapped[str] = mapped_column(Text, nullable=False)
     agent: Mapped[str] = mapped_column(Text, nullable=False, server_default="claude-code")
     session_ref: Mapped[str | None] = mapped_column(Text)
+    agent_version: Mapped[str | None] = mapped_column(Text)
+    git_branch: Mapped[str | None] = mapped_column(Text)
     excerpts: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     captured_at: Mapped[datetime] = _now()
 
