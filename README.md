@@ -53,7 +53,7 @@ failures are logged to `.rastro/capture.log`.
 4. **Run** the services with the same environment:
 
    ```bash
-   uv run --env-file .env uvicorn rastro_api.main:app --reload
+   uv run --env-file .env python -m rastro_api --reload   # selects a Windows-safe event loop
    PROCRASTINATE_APP=rastro_worker.app.app uv run --env-file .env procrastinate worker
    ```
 
