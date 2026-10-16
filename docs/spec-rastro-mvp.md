@@ -227,12 +227,13 @@ Compatibilidade: Windows, macOS e Linux. Em Windows o hook é executado pelo Git
 
 ### 7.2 Parser de sessões do Claude Code
 
-Formato verificado em 16/10/2026 com três sessões reais (Claude Code `2.1.209` e `2.1.295`, entrypoint `claude-desktop`, Windows), incluindo uma com 67 `Edit` e 3 `Write`. Isolar todo o parsing em `session_parsers/claude_code.py`, guardar a `version` em cada captura e falhar de forma suave (registar e ignorar a linha) perante tipos ou campos desconhecidos.
+Formato verificado em 16/10/2026 com quatro sessões reais (Claude Code `2.1.209` a `2.1.295`, entrypoint `claude-desktop`, Windows), a maior com 18 mil linhas, 54 MB, 1126 `Edit` e 388 `Write`. Isolar todo o parsing em `session_parsers/claude_code.py`, guardar a `version` em cada captura e falhar de forma suave (registar e ignorar a linha) perante tipos ou campos desconhecidos.
 
 **Localização dos ficheiros**
 
 - Diretório base: `~/.claude/projects/` em macOS e Linux, `%USERPROFILE%\.claude\projects\` em Windows. Respeitar `CLAUDE_CONFIG_DIR` se estiver definida.
 - Um ficheiro `<sessionId>.jsonl` por sessão, dentro de uma subpasta por projeto.
+- Os ficheiros podem ser grandes (54 MB numa sessão longa): ler em streaming, linha a linha, e ignorar ficheiros cuja data de modificação seja anterior ao commit anterior.
 - Não depender do algoritmo que codifica o nome da subpasta. Para encontrar as sessões de um repositório: ler a primeira linha com campo `cwd` de cada ficheiro modificado recentemente e comparar com a raiz do repositório (normalizar separadores, maiúsculas em Windows e aceitar subpastas da raiz).
 
 **Estrutura de cada linha**
@@ -245,8 +246,8 @@ Cada linha é um objeto JSON independente. Campos comuns às linhas de conversa:
 | `sessionId` | `agent_sessions.session_ref` |
 | `uuid`, `parentUuid` | Reconstruir a ordem da conversa (árvore, não apenas ordem das linhas) |
 | `timestamp` | ISO 8601 UTC; filtrar mensagens posteriores ao commit anterior |
-| `cwd` | Associar a sessão ao repositório |
-| `gitBranch` | Confirmar que a sessão corresponde ao branch do commit |
+| `cwd` | Associar a sessão ao repositório. Muda dentro da sessão (raiz e subpastas); aceitar qualquer `cwd` dentro da raiz |
+| `gitBranch` | Branch **da mensagem**, não da sessão: muda ao longo de uma mesma sessão (ex.: `develop`, `HEAD`, branches de feature). Comparar mensagem a mensagem |
 | `version` | Versão do Claude Code, guardada com a captura |
 | `isSidechain` | `true` = subagente; tratar à parte (ver abaixo) |
 | `message` | Conteúdo, no formato da API de Messages (`role`, `content`) |
@@ -261,21 +262,23 @@ Cada linha é um objeto JSON independente. Campos comuns às linhas de conversa:
 | `queue-operation` | Ignorar (duplica o pedido do utilizador) |
 | `ai-title`, `custom-title` | Opcional: título da sessão para mostrar ao utilizador |
 | `last-prompt` | Ignorar |
-| `system`, `file-history-snapshot`, `agent-name`, `atis-latch`, `cost-state`, `mode` | Ignorar |
+| `system`, `file-history-snapshot`, `file-history-delta`, `agent-name`, `atis-latch`, `cost-state`, `mode`, `pr-link` | Ignorar. O `system` com `subtype: compact_boundary` marca uma compactação (ver abaixo) |
 | qualquer outro tipo | Ignorar e registar (falhar de forma suave) |
 
 **Regras para mensagens `user`**
 
 - **Pedido humano** (a fonte principal da intenção): `message.content` é uma string, ou uma lista de blocos `text`, e o campo `origin.kind` é `"human"` quando existe.
 - **Resultado de ferramenta**: `message.content` contém blocos `tool_result` e a linha tem `toolUseResult` e `sourceToolAssistantUUID`. **Não** é intenção; usar só para saber se a ação foi executada.
-- O pedido humano pode ter blocos `image` além de `text` (ex.: `[image, text]`); usar só os blocos `text`.
-- **Ação recusada**: qualquer valor em `toolDenialKind` (observado: `"permission-rule"`) ou `tool_result` com `is_error: true`. A edição associada não chegou ao código; descartar.
+- O pedido humano pode ter blocos `image` além de `text` (`[image, text]` ou só `[image]`); usar só os blocos `text`.
+- **Resumos de compactação e comandos locais**: `message.content` em string **sem** `origin` não é intenção. Exemplos: "This session is being continued from a previous conversation..." (resumo gerado pelo agente), `<command-name>/compact</command-name>`, `<local-command-stdout>`, `<local-command-caveat>`. Regra prática: só tratar como pedido humano se `origin.kind == "human"`; se `origin` não existir, exigir também que não tenha `isMeta` nem começar por `<command-`, `<local-command-` ou "This session is being continued".
+- **Ação recusada**: qualquer valor em `toolDenialKind` (observados: `"permission-rule"` e `"user-rejected"`) ou `tool_result` com `is_error: true`. Erros comuns em edições: "File has not been read yet", "File has been modified since read", "String to replace not found". A edição associada não chegou ao código; descartar.
 - **Mensagens meta**: linhas com `isMeta: true` (ex.: `turnCompanion: true` com o texto `[Image: source: ...]`) não são intenção; ignorar.
 - **Mensagens de sistema** em blocos `text` que começam por `[Request interrupted` ou equivalentes: ignorar.
 
 **Regras para mensagens `assistant`**
 
-- Uma única resposta da API aparece repartida por **várias linhas**, uma por bloco de conteúdo, todas com o mesmo `message.id`. Agrupar por `message.id` antes de processar.
+- Uma única resposta da API aparece repartida por **várias linhas**, uma por bloco de conteúdo, todas com o mesmo `message.id`. Agrupar por `message.id` antes de processar; as linhas **não são necessariamente adjacentes** (201 casos intercalados na amostra grande).
+- **Duplicados**: o mesmo `uuid` pode aparecer várias vezes no ficheiro (1105 na amostra grande, após compactações). Deduplicar por `uuid` antes de processar.
 - Blocos `thinking`: ignorar (normalmente vêm vazios, só com assinatura).
 - Blocos `text`: explicações do agente; guardar apenas os que mencionam ficheiros do diff.
 - Blocos `tool_use`: `name` + `input`. Interessam sobretudo as ferramentas de edição (`Edit`, `MultiEdit`, `Write`, `NotebookEdit`), cujo `input.file_path` liga a conversa aos ficheiros do commit. Comandos `Bash` também podem alterar ficheiros; no MVP, guardar o `input.command` como contexto mas não o usar para ligação.
@@ -285,7 +288,7 @@ Cada linha é um objeto JSON independente. Campos comuns às linhas de conversa:
 
 1. Para cada `tool_use` de edição cujo `tool_result` correspondente (mesmo `tool_use_id`) não tenha `is_error: true`, normalizar `input.file_path` para caminho relativo à raiz do repositório. Os caminhos são absolutos no formato do sistema (ex.: `C:\Users\...` em Windows).
 2. Se o caminho estiver fora da raiz do repositório (ex.: `~/.claude/plans/*.md`), ignorar a edição. Se estiver no diff do commit, a edição pertence a este commit.
-3. O pedido humano mais próximo **antes** dessa edição na árvore (`parentUuid`) é a intenção associada. Guardar também os pedidos humanos anteriores da mesma sessão como contexto, até ao limite de tamanho.
+3. O pedido humano mais próximo **antes** dessa edição na árvore (`parentUuid`) é a intenção associada. Numa linha `compact_boundary` o `parentUuid` é `null` e o elo para a mensagem anterior está em `logicalParentUuid`; seguir este quando o primeiro falta. O resumo de compactação não substitui o pedido original: se a cadeia passar por uma compactação, usar também os pedidos humanos anteriores. Guardar também os pedidos humanos anteriores da mesma sessão como contexto, até ao limite de tamanho.
 
 **Subagentes (`isSidechain: true`)**
 
@@ -306,10 +309,12 @@ No MVP, incluir as edições feitas por subagentes, mas atribuir a intenção ao
 
 - `Edit`: `input` = `file_path`, `old_string`, `new_string`, `replace_all`. `Write`: `input` = `file_path`, `content`.
 - `tool_result` de sucesso tem `is_error` ausente; em erro tem `is_error: true` e `toolUseResult` é uma string.
+- Em 1514 edições da amostra grande, todos os `file_path` são absolutos; ainda assim o parser deve aceitar relativos.
+- O shell pode chamar-se `Bash` ou `PowerShell` conforme a sessão.
 
 **Pendente de validar**
 
-Antes da Fase 3, recolher amostras com subagentes (`isSidechain: true`, sempre `false` nas amostras atuais), `MultiEdit` e `NotebookEdit`.
+Antes da Fase 3, recolher amostras com subagentes (ferramenta de lançamento de agentes; `isSidechain: true` não aparece em nenhuma linha de conversa das quatro amostras), `MultiEdit` e `NotebookEdit`.
 
 ### 7.3 GitHub App
 
