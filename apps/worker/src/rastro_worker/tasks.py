@@ -5,7 +5,7 @@ from functools import wraps
 
 from githubkit.exception import GitHubException, RequestFailed
 
-from rastro_worker import indexing, rule_extraction
+from rastro_worker import indexing, resync, rule_extraction
 from rastro_worker.app import app
 from rastro_worker.deps import get_deps
 
@@ -47,6 +47,7 @@ async def ping(message: str = "pong") -> str:
 @log_github_errors
 async def index_repository(repository_id: str) -> None:
     await indexing.index_repository(get_deps(), uuid.UUID(repository_id))
+    await resync_anchors.configure(lock=repository_id).defer_async(repository_id=repository_id)
 
 
 @app.task(name="analyze_commit")
@@ -55,6 +56,8 @@ async def analyze_commit(repository_id: str, sha: str, on_default_branch: bool =
     summary = await indexing.analyze_commit(
         get_deps(), uuid.UUID(repository_id), sha, on_default_branch
     )
+    if on_default_branch:
+        await resync_anchors.configure(lock=repository_id).defer_async(repository_id=repository_id)
     if summary.get("sessions"):
         await extract_rules.configure(lock=repository_id).defer_async(
             repository_id=repository_id, sha=sha
@@ -66,3 +69,9 @@ async def analyze_commit(repository_id: str, sha: str, on_default_branch: bool =
 async def extract_rules(repository_id: str, sha: str, force: bool = False) -> None:
     """Rule extraction for one commit; `analyze_commit` and late session uploads queue it."""
     await rule_extraction.extract_rules(get_deps(), uuid.UUID(repository_id), sha, force=force)
+
+
+@app.task(name="resync_anchors")
+async def resync_anchors(repository_id: str) -> None:
+    """Follow renamed/moved code with the rule anchors; orphan rules whose code is gone."""
+    await resync.resync_anchors(get_deps(), uuid.UUID(repository_id))
