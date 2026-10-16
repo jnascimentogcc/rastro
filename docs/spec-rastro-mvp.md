@@ -227,7 +227,7 @@ Compatibilidade: Windows, macOS e Linux. Em Windows o hook é executado pelo Git
 
 ### 7.2 Parser de sessões do Claude Code
 
-Formato verificado em 16/10/2026 com uma sessão real (Claude Code `2.1.209`, entrypoint `claude-desktop`, Windows). Isolar todo o parsing em `session_parsers/claude_code.py`, guardar a `version` em cada captura e falhar de forma suave (registar e ignorar a linha) perante tipos ou campos desconhecidos.
+Formato verificado em 16/10/2026 com três sessões reais (Claude Code `2.1.209` e `2.1.295`, entrypoint `claude-desktop`, Windows), incluindo uma com 67 `Edit` e 3 `Write`. Isolar todo o parsing em `session_parsers/claude_code.py`, guardar a `version` em cada captura e falhar de forma suave (registar e ignorar a linha) perante tipos ou campos desconhecidos.
 
 **Localização dos ficheiros**
 
@@ -261,12 +261,16 @@ Cada linha é um objeto JSON independente. Campos comuns às linhas de conversa:
 | `queue-operation` | Ignorar (duplica o pedido do utilizador) |
 | `ai-title`, `custom-title` | Opcional: título da sessão para mostrar ao utilizador |
 | `last-prompt` | Ignorar |
+| `system`, `file-history-snapshot`, `agent-name`, `atis-latch`, `cost-state`, `mode` | Ignorar |
+| qualquer outro tipo | Ignorar e registar (falhar de forma suave) |
 
 **Regras para mensagens `user`**
 
 - **Pedido humano** (a fonte principal da intenção): `message.content` é uma string, ou uma lista de blocos `text`, e o campo `origin.kind` é `"human"` quando existe.
 - **Resultado de ferramenta**: `message.content` contém blocos `tool_result` e a linha tem `toolUseResult` e `sourceToolAssistantUUID`. **Não** é intenção; usar só para saber se a ação foi executada.
-- **Ação recusada**: `toolDenialKind: "user-rejected"`. A edição associada não chegou ao código; descartar.
+- O pedido humano pode ter blocos `image` além de `text` (ex.: `[image, text]`); usar só os blocos `text`.
+- **Ação recusada**: qualquer valor em `toolDenialKind` (observado: `"permission-rule"`) ou `tool_result` com `is_error: true`. A edição associada não chegou ao código; descartar.
+- **Mensagens meta**: linhas com `isMeta: true` (ex.: `turnCompanion: true` com o texto `[Image: source: ...]`) não são intenção; ignorar.
 - **Mensagens de sistema** em blocos `text` que começam por `[Request interrupted` ou equivalentes: ignorar.
 
 **Regras para mensagens `assistant`**
@@ -279,8 +283,8 @@ Cada linha é um objeto JSON independente. Campos comuns às linhas de conversa:
 
 **Ligação a ficheiros do commit**
 
-1. Para cada `tool_use` de edição cujo `tool_result` correspondente (mesmo `tool_use_id`) não tenha `is_error: true`, normalizar `input.file_path` para caminho relativo à raiz do repositório.
-2. Se o caminho estiver no diff do commit, a edição pertence a este commit.
+1. Para cada `tool_use` de edição cujo `tool_result` correspondente (mesmo `tool_use_id`) não tenha `is_error: true`, normalizar `input.file_path` para caminho relativo à raiz do repositório. Os caminhos são absolutos no formato do sistema (ex.: `C:\Users\...` em Windows).
+2. Se o caminho estiver fora da raiz do repositório (ex.: `~/.claude/plans/*.md`), ignorar a edição. Se estiver no diff do commit, a edição pertence a este commit.
 3. O pedido humano mais próximo **antes** dessa edição na árvore (`parentUuid`) é a intenção associada. Guardar também os pedidos humanos anteriores da mesma sessão como contexto, até ao limite de tamanho.
 
 **Subagentes (`isSidechain: true`)**
@@ -289,7 +293,8 @@ No MVP, incluir as edições feitas por subagentes, mas atribuir a intenção ao
 
 **O que nunca enviar ao servidor**
 
-- O conteúdo de `tool_result` e `toolUseResult` (pode conter ficheiros inteiros, variáveis de ambiente ou saídas com segredos).
+- O conteúdo de `tool_result` e `toolUseResult` (pode conter ficheiros inteiros, variáveis de ambiente ou saídas com segredos). Em `Edit`, o `toolUseResult` traz `originalFile`, `oldString`, `newString` e `structuredPatch`; em `Write`, traz `content`.
+- Se `old_string`, `new_string` ou `content` de uma edição forem enviados como contexto, passam primeiro pela deteção de segredos (secção 11).
 - Blocos `thinking` e assinaturas.
 - Linhas `attachment`.
 
@@ -297,9 +302,14 @@ No MVP, incluir as edições feitas por subagentes, mas atribuir a intenção ao
 
 - `MAX_EXCERPT_CHARS` (padrão 40 000) por captura. Se exceder, priorizar: pedido humano associado a cada edição, depois restantes pedidos humanos, depois textos do assistente.
 
+**Estrutura das ferramentas de edição (validada)**
+
+- `Edit`: `input` = `file_path`, `old_string`, `new_string`, `replace_all`. `Write`: `input` = `file_path`, `content`.
+- `tool_result` de sucesso tem `is_error` ausente; em erro tem `is_error: true` e `toolUseResult` é uma string.
+
 **Pendente de validar**
 
-A amostra analisada não contém edições de ficheiros. Antes da Fase 3, recolher uma segunda sessão em que o Claude Code use `Edit` e `Write` e confirmar a estrutura de `input` (`file_path`, `old_string`, `new_string`, `content`) e do `toolUseResult` correspondente.
+Antes da Fase 3, recolher amostras com subagentes (`isSidechain: true`, sempre `false` nas amostras atuais), `MultiEdit` e `NotebookEdit`.
 
 ### 7.3 GitHub App
 
