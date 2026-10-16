@@ -1,0 +1,20 @@
+{
+  "message": "Block implant bookings on Friday afternoon",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Add an agenda service that validates a slot before booking. Implants cannot be booked on Friday afternoon (from 12:00). Dr. Mendes needs 48 hours of follow-up after an implant and he does not work on weekends."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R1",
+      "action": "create",
+      "statement": "Implants cannot be booked on Friday afternoon",
+      "match": [["implant"], ["friday"]],
+      "rationale": { "any": ["48", "follow-up", "weekend"] },
+      "symbols": ["src/agenda.ts::AgendaService.validate"],
+      "quote": "Dr. Mendes needs 48 hours of follow-up after an implant"
+    }
+  ]
+}

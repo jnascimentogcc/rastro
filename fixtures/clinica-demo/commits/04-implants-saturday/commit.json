@@ -1,0 +1,21 @@
+{
+  "message": "Block implants on Saturdays too",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "The clinic now opens on Saturdays, but implants still cannot be done on Saturdays because Dr. Mendes is not available."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R1-saturday",
+      "action": "update",
+      "updates": "R1",
+      "statement": "Implants cannot be booked on Friday afternoon or on Saturday",
+      "match": [["implant"], ["saturday"]],
+      "rationale": { "any": ["mendes", "available", "weekend"] },
+      "symbols": ["src/agenda.ts::AgendaService.validate"],
+      "quote": "Dr. Mendes is not available"
+    }
+  ]
+}

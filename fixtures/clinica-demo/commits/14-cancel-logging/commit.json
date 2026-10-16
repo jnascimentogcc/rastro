@@ -1,0 +1,10 @@
+{
+  "message": "Log errors when cancelling",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Wrap cancel in a try/catch and log failures with console.error so we can see them in production."
+    }
+  ],
+  "expected": []
+}

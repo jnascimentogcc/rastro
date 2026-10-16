@@ -1,0 +1,20 @@
+{
+  "message": "Set appointment durations by treatment",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Orthodontic consultations take 45 minutes and every other treatment takes 30 minutes. The orthodontic chair needs 15 extra minutes of equipment setup."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R7",
+      "action": "create",
+      "statement": "Orthodontic consultations last 45 minutes, other treatments 30 minutes",
+      "match": [["orthodon"], ["45"]],
+      "rationale": { "any": ["equipment", "setup", "chair"] },
+      "symbols": ["src/agenda.ts::AgendaService.durationMinutes"],
+      "quote": "The orthodontic chair needs 15 extra minutes of equipment setup"
+    }
+  ]
+}

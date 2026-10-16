@@ -1,0 +1,20 @@
+{
+  "message": "Add senior discount to pricing",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Patients aged 65 or older get a 20% discount on any treatment."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R2",
+      "action": "create",
+      "statement": "Patients aged 65 or older get a 20% discount",
+      "match": [["65"], ["discount", "20%", "20 percent"]],
+      "rationale": null,
+      "symbols": ["src/pricing.ts::priceFor"],
+      "quote": "Patients aged 65 or older get a 20% discount on any treatment"
+    }
+  ]
+}

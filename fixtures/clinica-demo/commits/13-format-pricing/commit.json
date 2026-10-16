@@ -1,0 +1,10 @@
+{
+  "message": "Format pricing.ts",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Run prettier on pricing.ts. Formatting only."
+    }
+  ],
+  "expected": []
+}

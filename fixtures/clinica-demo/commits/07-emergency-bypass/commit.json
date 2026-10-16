@@ -1,0 +1,21 @@
+{
+  "message": "Let emergencies bypass the daily limit",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Emergency appointments are allowed even when the patient already has 3 appointments that day."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R6-emergency",
+      "action": "update",
+      "updates": "R6",
+      "statement": "Each patient can have at most 3 appointments per day, except emergencies",
+      "match": [["emergenc"]],
+      "rationale": null,
+      "symbols": ["src/booking.ts::canBook"],
+      "quote": "Emergency appointments are allowed even when the patient already has 3 appointments that day"
+    }
+  ]
+}

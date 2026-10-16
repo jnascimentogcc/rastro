@@ -1,0 +1,20 @@
+{
+  "message": "Require a guardian for minors",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Patients under 18 must have a guardian name registered before we accept them. It is a legal requirement."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R8",
+      "action": "create",
+      "statement": "Patients under 18 must have a guardian registered",
+      "match": [["under 18", "minor", "18"], ["guardian"]],
+      "rationale": { "any": ["legal", "law", "requirement"] },
+      "symbols": ["src/patients.ts::validatePatient"],
+      "quote": "It is a legal requirement"
+    }
+  ]
+}

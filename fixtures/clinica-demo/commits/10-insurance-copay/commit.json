@@ -1,0 +1,20 @@
+{
+  "message": "Charge insured patients a copay",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Insured patients pay a 15% copay and the 65+ discount does not apply to them. Our contract with the insurers forbids combining discounts."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R9",
+      "action": "create",
+      "statement": "Insured patients pay a 15% copay and cannot combine it with the senior discount",
+      "match": [["insur"], ["15"]],
+      "rationale": { "any": ["contract", "insurer"] },
+      "symbols": ["src/pricing.ts::priceFor"],
+      "quote": "Our contract with the insurers forbids combining discounts"
+    }
+  ]
+}

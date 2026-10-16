@@ -1,0 +1,20 @@
+{
+  "message": "Schedule appointment reminders",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Send patients a reminder 48 hours before their appointment."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R10",
+      "action": "create",
+      "statement": "Patients receive a reminder 48 hours before their appointment",
+      "match": [["reminder"], ["48"]],
+      "rationale": null,
+      "symbols": ["src/reminders.ts::reminderTime"],
+      "quote": "Send patients a reminder 48 hours before their appointment"
+    }
+  ]
+}

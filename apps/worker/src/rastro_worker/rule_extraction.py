@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -199,6 +199,9 @@ async def _existing_rules(
     ids: dict[tuple[str, str], uuid.UUID],
     touched: dict[str, list[Symbol]],
 ) -> list[PromptRule]:
+    """Active rules the change may be touching: anchored to a changed symbol, or anchored to a
+    symbol with identical normalized code elsewhere (the copy-paste case: the agent duplicates
+    existing logic, so the model should update that rule instead of inventing a new one)."""
     touched_ids = {
         ids[(path, s.qualified_name)]: _key(path, s.qualified_name)
         for path, symbols in touched.items()
@@ -207,18 +210,29 @@ async def _existing_rules(
     }
     if not touched_ids:
         return []
+    hashes = {s.body_hash for symbols in touched.values() for s in symbols if s.kind != "class"}
+    anchored = SymbolRow.id.in_(touched_ids)
+    same_code = and_(
+        SymbolRow.body_hash.in_(hashes),
+        SymbolRow.kind != "class",
+        SymbolRow.status == "active",
+        SymbolRow.end_line - SymbolRow.start_line + 1 >= DUPLICATE_MIN_LINES,
+    )
     rows = await session.execute(
-        select(Rule, RuleAnchor.symbol_id)
+        select(Rule, SymbolRow.id, SymbolRow.file_path, SymbolRow.qualified_name)
         .join(RuleAnchor, RuleAnchor.rule_id == Rule.id)
+        .join(SymbolRow, SymbolRow.id == RuleAnchor.symbol_id)
         .where(
             Rule.repository_id == repository_id,
             Rule.status == "active",
-            RuleAnchor.symbol_id.in_(touched_ids),
+            SymbolRow.repository_id == repository_id,
+            or_(anchored, same_code),
         )
     )
     grouped: dict[uuid.UUID, tuple[Rule, list[str]]] = {}
-    for rule, symbol_id in rows:
-        grouped.setdefault(rule.id, (rule, []))[1].append(touched_ids[symbol_id])
+    for rule, symbol_id, path, name in rows:
+        keys = grouped.setdefault(rule.id, (rule, []))[1]
+        keys.append(touched_ids.get(symbol_id) or _key(path, name))
     return [
         PromptRule(str(rule.id), rule.statement, rule.rationale, tuple(keys))
         for rule, keys in grouped.values()
