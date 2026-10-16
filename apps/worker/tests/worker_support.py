@@ -71,6 +71,56 @@ class WorkerContext:
             )
             return {(path, name): role for path, name, role in rows}
 
+    async def add_rule(
+        self, statement: str, anchors: dict[tuple[str, str], str], *, status: str = "active"
+    ) -> uuid.UUID:
+        """A rule anchored to existing symbols: {(file, qualified_name): role}."""
+        async with self.deps.session_factory() as session, session.begin():
+            rule = Rule(
+                repository_id=self.repository_id, statement=statement, confidence=0.9, status=status
+            )
+            session.add(rule)
+            await session.flush()
+            for (path, name), role in anchors.items():
+                symbol_id = await session.scalar(
+                    select(Symbol.id).where(
+                        Symbol.repository_id == self.repository_id,
+                        Symbol.file_path == path,
+                        Symbol.qualified_name == name,
+                    )
+                )
+                assert symbol_id is not None, f"symbol {path}::{name} is not indexed"
+                session.add(RuleAnchor(rule_id=rule.id, symbol_id=symbol_id, role=role))
+            return rule.id
+
+    async def rule_status(self, rule_id: uuid.UUID) -> str:
+        async with self.deps.session_factory() as session:
+            status = await session.scalar(select(Rule.status).where(Rule.id == rule_id))
+            assert status is not None
+            return status
+
+    async def set_embedding(self, path: str, name: str, vector: list[float]) -> None:
+        async with self.deps.session_factory() as session, session.begin():
+            symbol = await session.scalar(
+                select(Symbol).where(
+                    Symbol.repository_id == self.repository_id,
+                    Symbol.file_path == path,
+                    Symbol.qualified_name == name,
+                )
+            )
+            assert symbol is not None
+            symbol.embedding = vector
+
+    async def embedding_of(self, path: str, name: str) -> list[float] | None:
+        async with self.deps.session_factory() as session:
+            return await session.scalar(
+                select(Symbol.embedding).where(
+                    Symbol.repository_id == self.repository_id,
+                    Symbol.file_path == path,
+                    Symbol.qualified_name == name,
+                )
+            )
+
     async def commit(self, sha: str) -> Commit | None:
         async with self.deps.session_factory() as session:
             return await session.scalar(

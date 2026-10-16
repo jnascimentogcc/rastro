@@ -107,6 +107,7 @@ class CommitResult:
     status: str
     events: list[EventResult] = field(default_factory=list)
     extra_rules: int = 0  # rules touched that match no planted rule
+    produced: list[tuple[str, str | None]] = field(default_factory=list)  # (statement, rationale)
     false_positive: bool = False  # a technical-only commit produced rules
 
 
@@ -158,7 +159,7 @@ def _ratio(numerator: int, denominator: int) -> float:
     return numerator / denominator if denominator else 1.0
 
 
-def format_report(report: Report) -> str:
+def format_report(report: Report, *, verbose: bool = False) -> str:
     lines = [f"{'commit':<28} {'status':<20} planted  correct  extras  false+"]
     for commit in report.commits:
         correct = sum(e.correct for e in commit.events)
@@ -166,6 +167,10 @@ def format_report(report: Report) -> str:
             f"{commit.name:<28} {commit.status:<20} {len(commit.events):>7}  {correct:>7}  "
             f"{commit.extra_rules:>6}  {'YES' if commit.false_positive else '-':>6}"
         )
+        if verbose:
+            for statement, rationale in commit.produced:
+                lines.append(f"    > {statement}")
+                lines.append(f"      why: {rationale}")
         for event in commit.events:
             if not event.correct:
                 problems = []
@@ -341,6 +346,7 @@ async def _score(
             else []
         )
     result = CommitResult(name=commit.name, status=status)
+    result.produced = [(r.statement, r.rationale) for r in touched]
     used: set[uuid.UUID] = set()
     for expected in commit.expected:
         event = EventResult(expected)

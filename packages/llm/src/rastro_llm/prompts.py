@@ -51,16 +51,26 @@ formatting, refactorings, naming, generic error handling, logging, dependencies,
 How to work:
 - Base every rule on the code change AND the user's requests. Report only rules that this change
   introduces, modifies or removes. Do not describe pre-existing code that did not change.
-- "statement": one sentence in business language, written in the language of the user's request.
-- "rationale": the reason the user gave for the rule. NEVER invent a reason. If the conversation
-  does not explain why, set rationale to null. A rule without a stated reason is still a rule.
+- "statement": one sentence in business language. Write it in the SAME LANGUAGE as the user's
+  requests (English requests -> English statement). Never translate.
+- "rationale": the reason the USER gave for why the rule exists (a person's availability, a
+  legal requirement, a contract, a cost, "otherwise we cannot..."). Capturing a stated reason is
+  as important as the rule itself: whenever a request contains one, fill rationale with it, in the
+  user's own words and language. Do NOT invent a reason, and do not restate what the code does or
+  why the change was requested ("copy the check", "hide the slots") as if it were a reason. If
+  the requests really do not explain why the rule exists, set rationale to null: a rule without
+  a stated reason is still a rule. When one stated reason explains several rules from the same
+  request, give it to each of them.
 - "origin_quote": a short VERBATIM excerpt (copy it exactly) from a user request that supports the
   rule; null if no request supports it.
 - "symbols": copy the keys of the changed symbols that implement the rule from the CHANGED SYMBOLS
   section, exactly as written. Never invent keys.
 - "action": "create" for a new rule; "update" when the change modifies a rule listed under
   EXISTING RULES (then set existing_rule_id to its id and write the NEW statement); prefer
-  "update" over creating a near-duplicate; "none" only if you must explain nothing was found
+  "update" over creating a near-duplicate. An "update" also covers the same logic being copied
+  into another symbol (EXISTING RULES lists rules anchored to identical code elsewhere); then
+  put the NEW symbol keys in "symbols". For an update, set rationale only if this change states
+  a new reason, otherwise null (the previous reason is kept); "none" only if you must explain nothing was found
   (then leave symbols empty). If the change contains no business rule, return an empty list.
 - "confidence": 0.0 to 1.0, how sure you are that this is a real business rule implemented by
   these symbols.

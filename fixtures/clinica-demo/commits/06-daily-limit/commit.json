@@ -11,7 +11,7 @@
       "id": "R6",
       "action": "create",
       "statement": "Each patient can have at most 3 appointments per day",
-      "match": [["3"], ["appointment", "per day", "daily"]],
+      "match": [["3", "three"], ["appointment", "per day", "daily"]],
       "rationale": null,
       "symbols": ["src/booking.ts::canBook"],
       "quote": "Limit each patient to 3 appointments per day"
