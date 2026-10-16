@@ -36,7 +36,7 @@ def test_prompt_contains_every_section_and_the_symbol_keys() -> None:
         '<symbol key="src/agenda.ts::validate" kind="function">',
         '<rule id="rule-1"',
         "rationale: unknown",
-        "NEVER invent a reason",
+        "Do NOT invent a reason",
     ):
         assert fragment in prompt
 

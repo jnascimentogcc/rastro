@@ -58,12 +58,74 @@ class ExtractionSummary:
     created: int = 0
     updated: int = 0
     discarded: int = 0
+    unchanged: int = 0  # updates that would change nothing (typically refactors)
     duplicates_linked: int = 0
     rule_ids: list[uuid.UUID] = field(default_factory=list)
 
 
 def _normalize(text: str) -> str:
     return " ".join(text.lower().split())
+
+
+_WORD = re.compile(r"[a-z]+|[0-9]+")  # "48h" -> "48", "h"
+_FILLER = frozenset(
+    [
+        "that",
+        "this",
+        "with",
+        "because",
+        "they",
+        "their",
+        "have",
+        "from",
+        "will",
+        "would",
+        "should",
+        "could",
+        "when",
+        "which",
+        "there",
+        "been",
+        "also",
+        "only",
+        "than",
+        "then",
+        "them",
+        "what",
+        "were",
+        "into",
+        "more",
+        "some",
+        "such",
+        "does",
+        "done",
+        "make",
+        "made",
+        "need",
+        "needs",
+    ]
+)
+GROUNDING_THRESHOLD = 0.5
+
+
+def _content_stems(text: str) -> set[str]:
+    """Distinctive words of a text (numbers and words of 4+ letters, minus filler), cut to five
+    letters so that "follow-up"/"following" or "insurer"/"insurers" still match."""
+    return {
+        word[:5]
+        for word in _WORD.findall(text.lower())
+        if (word.isdigit() or len(word) >= 4) and word not in _FILLER
+    }
+
+
+def _grounded(rationale: str, request_texts: list[str]) -> bool:
+    words = _content_stems(rationale)
+    if not words:
+        return False
+    known = (
+        set().union(*(_content_stems(text) for text in request_texts)) if request_texts else set()
+    )
+    return len(words & known) / len(words) >= GROUNDING_THRESHOLD
 
 
 def _key(path: str, qualified_name: str) -> str:
@@ -281,8 +343,8 @@ def _validate(
     sessions: list[AgentSession],
     valid_keys: set[str],
     existing: list[PromptRule],
-) -> tuple[list[_Accepted], int]:
-    existing_ids = {r.id for r in existing}
+) -> tuple[list[_Accepted], int, int]:
+    existing_by_id = {r.id: r for r in existing}
     user_texts = [
         (s.id, _normalize(str(e.get("text", ""))))
         for s in sessions
@@ -291,6 +353,7 @@ def _validate(
     ]
     accepted: list[_Accepted] = []
     discarded = 0
+    unchanged = 0
     for rule in extraction.rules:
         symbols = [k for k in dict.fromkeys(rule.symbols) if k in valid_keys]
         if (
@@ -302,25 +365,41 @@ def _validate(
             discarded += 1
             continue
 
-        # Never invent the why: keep a rationale only when its quote is really in a request.
         quote = rule.origin_quote.strip() if rule.origin_quote else None
         session_id: uuid.UUID | None = None
         if quote:
             needle = _normalize(quote)
             session_id = next((sid for sid, text in user_texts if needle in text), None)
             if session_id is None:
-                quote = None
-        rationale = rule.rationale.strip() if rule.rationale and quote else None
+                quote = None  # not verbatim: do not store a made-up citation
+
+        # Never invent the why: keep a rationale only if what it says is grounded in the user's
+        # own words (the model may paraphrase, but it cannot bring in new facts).
+        rationale = rule.rationale.strip() if rule.rationale else None
+        if rationale and not _grounded(rationale, [text for _, text in user_texts]):
+            logger.warning("rationale dropped, not grounded in the requests: %r", rationale)
+            rationale = None
 
         existing_id = None
-        if rule.action == "update" and rule.existing_rule_id in existing_ids:
+        if rule.action == "update" and rule.existing_rule_id in existing_by_id:
             existing_id = uuid.UUID(str(rule.existing_rule_id))
+            current = existing_by_id[rule.existing_rule_id]
+            restated = rationale is not None and _normalize(rationale) == _normalize(
+                current.rationale or ""
+            )
+            if (
+                _normalize(rule.statement) == _normalize(current.statement)
+                and (not rationale or restated)
+                and set(symbols) <= set(current.symbol_keys)
+            ):
+                unchanged += 1  # the model "updated" a rule without changing anything
+                continue
         accepted.append(
             _Accepted(
                 rule, symbols, rationale or None, quote, session_id or sessions[0].id, existing_id
             )
         )
-    return accepted, discarded
+    return accepted, discarded, unchanged
 
 
 async def _apply(
@@ -340,8 +419,8 @@ async def _apply(
         for path, symbols in touched.items()
         for s in symbols
     }
-    accepted, discarded = _validate(extraction, sessions, set(key_to_symbol), existing)
-    summary = ExtractionSummary("analyzed", discarded=discarded)
+    accepted, discarded, unchanged = _validate(extraction, sessions, set(key_to_symbol), existing)
+    summary = ExtractionSummary("analyzed", discarded=discarded, unchanged=unchanged)
     if not accepted:
         return summary
 
