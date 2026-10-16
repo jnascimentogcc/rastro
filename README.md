@@ -79,7 +79,14 @@ Measure quality against the planted rules of `fixtures/clinica-demo` (needs the 
 ```bash
 uv run --env-file .env python -m rastro_worker.evaluate fixtures/clinica-demo            # real model
 uv run --env-file .env python -m rastro_worker.evaluate fixtures/clinica-demo --oracle   # harness check, no model
+uv run --env-file .env python -m rastro_worker.evaluate fixtures/clinica-demo --runs 3   # models vary between runs
 ```
+
+`--verbose` prints every rule the model produced next to what was expected.
+
+Measured on `fixtures/clinica-demo` (3 runs each, `text-embedding-3-small`): `gpt-6-luna` 94% mean (worst
+91%, 1 false-positive commit in 2 of 3 runs), `gpt-6.1-sol` 100% in every run with no false positives and
+about half the output tokens. `gpt-6.1-sol` is the recommended `LLM_MODEL`.
 
 Checks (the same ones CI runs):
 

@@ -98,16 +98,47 @@ async def test_prompt_carries_request_diff_and_changed_symbol_only(worker: Worke
     )  # only the method changed
 
 
-async def test_rationale_is_dropped_when_the_quote_is_not_in_the_conversation(
-    worker: WorkerContext,
-) -> None:
+async def test_an_invented_rationale_is_dropped(worker: WorkerContext) -> None:
     await stage_friday_commit(worker)
-    worker.llm.queue(RuleExtraction(rules=[rule(origin_quote="the clinic closes on weekends")]))
+    worker.llm.queue(
+        RuleExtraction(
+            rules=[
+                rule(
+                    rationale="The clinic closes for deep cleaning on weekends",
+                    origin_quote="the clinic closes on weekends",
+                )
+            ]
+        )
+    )
 
     await extract_rules(worker.deps, worker.repository_id, SHA2)
 
     [stored] = await worker.rules()
     assert stored.rationale is None  # never invent the why
+    async with worker.deps.session_factory() as session:
+        origin = await session.scalar(select(RuleOrigin).where(RuleOrigin.rule_id == stored.id))
+    assert origin is not None and origin.quote is None  # and no made-up citation
+
+
+async def test_a_paraphrased_rationale_is_kept_but_an_unverifiable_quote_is_not(
+    worker: WorkerContext,
+) -> None:
+    await stage_friday_commit(worker)
+    worker.llm.queue(
+        RuleExtraction(
+            rules=[
+                rule(
+                    rationale="Dr. Mendes needs two days of follow-up after an implant",
+                    origin_quote="paraphrased, not verbatim",
+                )
+            ]
+        )
+    )
+
+    await extract_rules(worker.deps, worker.repository_id, SHA2)
+
+    [stored] = await worker.rules()
+    assert stored.rationale == "Dr. Mendes needs two days of follow-up after an implant"
     async with worker.deps.session_factory() as session:
         origin = await session.scalar(select(RuleOrigin).where(RuleOrigin.rule_id == stored.id))
     assert origin is not None and origin.quote is None
@@ -208,6 +239,42 @@ async def test_a_later_commit_updates_the_rule_instead_of_creating_another(
             )
         ).all()
     assert sorted(origins) == [SHA2, SHA3]
+
+
+async def test_an_update_that_changes_nothing_is_ignored(worker: WorkerContext) -> None:
+    await stage_friday_commit(worker)
+    worker.llm.queue(RuleExtraction(rules=[rule()]))
+    await extract_rules(worker.deps, worker.repository_id, SHA2)
+    [first] = await worker.rules()
+
+    refactored = AFTER.replace("kind", "treatment")
+    worker.stage_commit(SHA3, {AGENDA: refactored}, {AGENDA: AFTER})
+    await worker.add_commit_row(SHA3)
+    await worker.add_session(SHA3, [user_excerpt("Rename the parameter, no behaviour change")])
+    worker.llm.queue(
+        RuleExtraction(
+            rules=[
+                rule(
+                    action="update",
+                    existing_rule_id=str(first.id),
+                    rationale=None,
+                    origin_quote=None,
+                )
+            ]
+        )
+    )
+
+    summary = await extract_rules(worker.deps, worker.repository_id, SHA3)
+
+    assert (summary.created, summary.updated, summary.unchanged) == (0, 0, 1)
+    assert summary.rule_ids == []
+    async with worker.deps.session_factory() as session:
+        origins = (
+            await session.scalars(
+                select(RuleOrigin.commit_sha).where(RuleOrigin.rule_id == first.id)
+            )
+        ).all()
+    assert list(origins) == [SHA2]  # the refactor is not recorded as an origin
 
 
 async def test_update_of_an_unknown_rule_becomes_a_new_rule(worker: WorkerContext) -> None:
