@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rastro
+          POSTGRES_PASSWORD: rastro
+          POSTGRES_DB: rastro
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rastro -d rastro"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://rastro:rastro@localhost:5432/rastro
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --all-packages --python 3.12
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy apps packages
+      - name: Apply migrations and check for model drift
+        working-directory: packages/db
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+      - run: uv run pytest
