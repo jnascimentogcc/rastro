@@ -1,7 +1,6 @@
 """Build capture payloads for a commit and send them. Nothing here may break a commit."""
 
 import json
-import os
 import subprocess
 import sys
 import traceback
@@ -50,7 +49,7 @@ def spawn_background_capture(root: Path, sha: str) -> None:
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
     }
-    if os.name == "nt":
+    if sys.platform == "win32":
         options["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         options["start_new_session"] = True
