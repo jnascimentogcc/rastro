@@ -2,18 +2,23 @@ import uuid
 from collections.abc import AsyncIterator
 
 import pytest
-from api_support import ApiContext
+from api_support import WEBHOOK_SECRET, ApiContext
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete
+from procrastinate import testing
+from pydantic import SecretStr
+from sqlalchemy import delete, select
 
 from rastro_api.main import create_app
 from rastro_db import create_engine, create_session_factory, generate_token, hash_token
-from rastro_db.models import AgentSession, Repository
+from rastro_db.models import AgentSession, Commit, Repository
+from rastro_github import GitHubSettings
+from rastro_worker.app import build_app
 
 
 @pytest.fixture
 async def api() -> AsyncIterator[ApiContext]:
-    """App wired to the compose Postgres with a throwaway repository (needs migrations applied)."""
+    """App wired to the compose Postgres (migrations applied) with an in-memory job queue and a
+    throwaway repository. Everything created for the test is removed afterwards."""
     engine = create_engine()
     token = generate_token()
     repository_id = uuid.uuid4()
@@ -29,14 +34,25 @@ async def api() -> AsyncIterator[ApiContext]:
                 api_token_hash=hash_token(token),
             )
         )
-    app = create_app(engine)
+    connector = testing.InMemoryConnector()
+    app = create_app(
+        engine,
+        queue=build_app(connector),
+        github_settings=GitHubSettings(github_webhook_secret=SecretStr(WEBHOOK_SECRET)),
+    )
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            yield ApiContext(client, token, repository_id, engine)
+            yield ApiContext(client, token, repository_id, engine, connector)
     async with factory() as session, session.begin():
-        await session.execute(
-            delete(AgentSession).where(AgentSession.repository_id == repository_id)
-        )
-        await session.execute(delete(Repository).where(Repository.id == repository_id))
+        # webhooks may have created other repositories (ids in the range the tests use)
+        created = (
+            await session.scalars(
+                select(Repository.id).where(Repository.github_id.between(9_100_000, 9_199_999))
+            )
+        ).all()
+        for rid in [repository_id, *created]:
+            await session.execute(delete(AgentSession).where(AgentSession.repository_id == rid))
+            await session.execute(delete(Commit).where(Commit.repository_id == rid))
+            await session.execute(delete(Repository).where(Repository.id == rid))
     await engine.dispose()

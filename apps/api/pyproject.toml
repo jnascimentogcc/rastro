@@ -8,6 +8,8 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "rastro-db",
+    "rastro-github",
+    "rastro-worker",
 ]
 
 [build-system]

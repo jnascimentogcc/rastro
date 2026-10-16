@@ -36,6 +36,36 @@ The token goes to the system keychain (or `RASTRO_TOKEN` on headless machines), 
 Captures wait in `.rastro/pending/` (git-ignored through `.git/info/exclude`) until the upload succeeds;
 failures are logged to `.rastro/capture.log`.
 
+## GitHub App setup (phase 4)
+
+1. **Create the App** at <https://github.com/settings/apps/new>:
+   - Homepage URL: any (e.g. the repository URL).
+   - Webhook URL: a public URL that reaches your API (for local work use <https://smee.io> and
+     `npx smee-client --url https://smee.io/XXXX --target http://localhost:8000/webhooks/github`).
+   - Webhook secret: a long random string (`python -c "import secrets; print(secrets.token_urlsafe(32))"`).
+   - Repository permissions: Contents: read-only, Pull requests: read and write, Metadata: read-only.
+   - Subscribe to events: Push, Pull request (the `installation` events are always sent).
+   - Where can this App be installed: only on your account.
+2. **Generate a private key** (App settings, "Private keys") and save the `.pem` under `secrets/`
+   (git-ignored). Note the **App ID**.
+3. **Fill `.env`** (copy `.env.example`): `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`,
+   `GITHUB_WEBHOOK_SECRET`.
+4. **Run** the services with the same environment:
+
+   ```bash
+   uv run --env-file .env uvicorn rastro_api.main:app --reload
+   PROCRASTINATE_APP=rastro_worker.app.app uv run --env-file .env procrastinate worker
+   ```
+
+5. **Install the App** on a test repository. GitHub sends `installation`; the API registers the
+   repository and the worker runs `index_repository` (symbols and call graph of the default
+   branch). Check "Advanced > Recent deliveries" in the App settings for `202` responses.
+6. **Push a commit**: the API stores it and queues `analyze_commit`, which joins it with the
+   session captured by `rastro` (same SHA) and refreshes the symbols of the files it touched.
+
+Webhooks: `ping`, `installation`, `installation_repositories` and `push` are handled;
+`pull_request` is accepted and ignored until phase 7.
+
 Checks (the same ones CI runs):
 
 ```bash

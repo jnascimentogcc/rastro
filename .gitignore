@@ -9,6 +9,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-# Local config
+# Local config and secrets
 .env
+secrets/
+*.pem
 .rastro/
