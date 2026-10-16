@@ -1,0 +1,52 @@
+[project]
+name = "rastro-workspace"
+version = "0.0.0"
+description = "Rastro monorepo workspace root."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "ruff>=0.8",
+]
+
+[tool.uv.workspace]
+members = ["apps/*", "packages/*"]
+
+[tool.uv.sources]
+rastro-db = { workspace = true }
+rastro-api = { workspace = true }
+rastro-worker = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["fixtures", "packages/db/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["rastro_api", "rastro_db", "rastro_worker"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["fixtures/", "migrations/"]
+mypy_path = "apps/api/src:apps/worker/src:packages/db/src"
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["pgvector.*", "procrastinate.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["apps", "packages"]
+markers = ["db: requires a running PostgreSQL (see docker-compose.yml)"]

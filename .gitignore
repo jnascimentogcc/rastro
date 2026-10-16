@@ -1,1 +1,14 @@
+# Local session samples (may contain private conversations)
 docs/*.jsonl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Local config
+.env
+.rastro/
