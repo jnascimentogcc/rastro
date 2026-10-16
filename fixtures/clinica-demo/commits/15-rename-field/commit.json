@@ -1,0 +1,10 @@
+{
+  "message": "Rename Booking.startsAt to startTime",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Rename the Booking field startsAt to startTime. Naming only, nothing else changes."
+    }
+  ],
+  "expected": []
+}

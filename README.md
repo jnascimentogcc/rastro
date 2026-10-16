@@ -53,7 +53,7 @@ failures are logged to `.rastro/capture.log`.
 4. **Run** the services with the same environment:
 
    ```bash
-   uv run --env-file .env uvicorn rastro_api.main:app --reload
+   uv run --env-file .env python -m rastro_api --reload   # selects a Windows-safe event loop
    PROCRASTINATE_APP=rastro_worker.app.app uv run --env-file .env procrastinate worker
    ```
 
@@ -65,6 +65,21 @@ failures are logged to `.rastro/capture.log`.
 
 Webhooks: `ping`, `installation`, `installation_repositories` and `push` are handled;
 `pull_request` is accepted and ignored until phase 7.
+
+## Rule extraction (phase 5)
+
+For every commit with a captured session, the worker's `rule_extraction` job sends the diff, the
+user requests, the changed symbols and the rules already anchored to them to the model, validates
+the answer and stores rules, origins and anchors (plus exact/embedding duplicates). Set
+`OPENAI_API_KEY`, `LLM_MODEL` and `EMBEDDING_MODEL` in `.env` (embeddings must support the
+`dimensions` parameter; the database uses 1024). Without them the job is skipped.
+
+Measure quality against the planted rules of `fixtures/clinica-demo` (needs the compose Postgres):
+
+```bash
+uv run --env-file .env python -m rastro_worker.evaluate fixtures/clinica-demo            # real model
+uv run --env-file .env python -m rastro_worker.evaluate fixtures/clinica-demo --oracle   # harness check, no model
+```
 
 Checks (the same ones CI runs):
 

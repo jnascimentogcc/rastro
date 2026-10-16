@@ -1,0 +1,21 @@
+{
+  "message": "Hide disallowed slots in the calendar view",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "The calendar view must hide the same slots we reject when booking, so copy that check into a calendar helper."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R1-calendar",
+      "action": "update",
+      "updates": "R1",
+      "statement": "Implants cannot be booked on Friday afternoon",
+      "match": [["implant"]],
+      "rationale": { "any": ["48", "follow-up", "weekend"] },
+      "symbols": ["src/calendar.ts::CalendarRules.isSlotAllowed"],
+      "quote": "hide the same slots we reject when booking"
+    }
+  ]
+}

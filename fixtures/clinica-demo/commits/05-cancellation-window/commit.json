@@ -1,0 +1,20 @@
+{
+  "message": "Add cancellation rules",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Appointments cannot be cancelled less than 24 hours before they start. Otherwise we cannot resell the slot."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R5",
+      "action": "create",
+      "statement": "Appointments cannot be cancelled less than 24 hours before they start",
+      "match": [["cancel"], ["24"]],
+      "rationale": { "any": ["resell", "slot"] },
+      "symbols": ["src/booking.ts::cancel"],
+      "quote": "Otherwise we cannot resell the slot"
+    }
+  ]
+}

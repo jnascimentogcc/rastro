@@ -9,6 +9,7 @@ dependencies = [
     "rastro-code-analysis",
     "rastro-db",
     "rastro-github",
+    "rastro-llm",
 ]
 
 [build-system]

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import cast
 
-from sqlalchemy import delete, select, true, update
+from sqlalchemy import delete, select, true, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -164,6 +164,50 @@ async def persist_analyses(
     return IndexResult(
         files=len(analyses), symbols=len(symbol_ids), edges=edges, removed_files=len(removed)
     )
+
+
+async def ensure_symbols(
+    session: AsyncSession,
+    repository_id: uuid.UUID,
+    sha: str,
+    analyses: Sequence[FileAnalysis],
+) -> dict[tuple[str, str], uuid.UUID]:
+    """Make sure every symbol of `analyses` has a row, without touching existing ones, and return
+    their ids. Used for commits on non-default branches, whose symbols must not overwrite the
+    default-branch state but still need an id to anchor rules to."""
+    keys = [(a.file_path, s.qualified_name) for a in analyses for s in a.symbols]
+    by_key = {(a.file_path, s.qualified_name): s for a in analyses for s in a.symbols}
+    for chunk in _chunks(keys, _INSERT_CHUNK):
+        await session.execute(
+            insert(SymbolRow)
+            .values(
+                [
+                    {
+                        "repository_id": repository_id,
+                        "file_path": path,
+                        "qualified_name": name,
+                        "kind": by_key[(path, name)].kind,
+                        "body_hash": by_key[(path, name)].body_hash,
+                        "start_line": by_key[(path, name)].start_line,
+                        "end_line": by_key[(path, name)].end_line,
+                        "last_seen_sha": sha,
+                        "status": "active",
+                    }
+                    for path, name in chunk
+                ]
+            )
+            .on_conflict_do_nothing(index_elements=["repository_id", "file_path", "qualified_name"])
+        )
+    ids: dict[tuple[str, str], uuid.UUID] = {}
+    for chunk in _chunks(keys, _INSERT_CHUNK):
+        rows = await session.execute(
+            select(SymbolRow.id, SymbolRow.file_path, SymbolRow.qualified_name).where(
+                SymbolRow.repository_id == repository_id,
+                tuple_(SymbolRow.file_path, SymbolRow.qualified_name).in_(list(chunk)),
+            )
+        )
+        ids.update({(row.file_path, row.qualified_name): row.id for row in rows})
+    return ids
 
 
 async def _rebuild_edges(

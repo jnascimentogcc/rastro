@@ -1,0 +1,10 @@
+{
+  "message": "Refactor AgendaService.validate into helpers",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Refactor AgendaService.validate into smaller helper methods. No behaviour change."
+    }
+  ],
+  "expected": []
+}

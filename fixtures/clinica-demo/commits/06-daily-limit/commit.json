@@ -1,0 +1,20 @@
+{
+  "message": "Limit appointments per patient per day",
+  "session": [
+    {
+      "kind": "intent",
+      "text": "Limit each patient to 3 appointments per day."
+    }
+  ],
+  "expected": [
+    {
+      "id": "R6",
+      "action": "create",
+      "statement": "Each patient can have at most 3 appointments per day",
+      "match": [["3"], ["appointment", "per day", "daily"]],
+      "rationale": null,
+      "symbols": ["src/booking.ts::canBook"],
+      "quote": "Limit each patient to 3 appointments per day"
+    }
+  ]
+}

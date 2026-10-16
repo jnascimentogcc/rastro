@@ -98,3 +98,22 @@ async def test_invalid_payloads_are_rejected(api: ApiContext, patch: dict[str, o
     )
 
     assert response.status_code == 422
+
+
+async def test_upload_queues_extraction_only_when_the_commit_is_already_known(
+    api: ApiContext,
+) -> None:
+    from rastro_db.models import Commit
+
+    first = await api.client.post("/v1/sessions", json=PAYLOAD, headers=auth(api.token))
+    assert first.status_code == 201
+    assert api.jobs("rule_extraction") == []  # the push webhook has not arrived yet
+
+    async with create_session_factory(api.engine)() as session, session.begin():
+        session.add(Commit(repository_id=api.repository_id, sha="a" * 40))
+    late = {**PAYLOAD, "session_ref": "sess-2"}
+    await api.client.post("/v1/sessions", json=late, headers=auth(api.token))
+
+    [job] = api.jobs("rule_extraction")
+    assert job["args"] == {"repository_id": str(api.repository_id), "sha": "a" * 40}
+    assert job["lock"] == str(api.repository_id)
