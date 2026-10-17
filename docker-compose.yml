@@ -1,3 +1,16 @@
+# `docker compose up` runs the whole stack: postgres -> migrate (one-shot) -> api + worker.
+# Settings come from .env (optional, see .env.example); DATABASE_URL is always pointed at
+# the compose postgres below.
+x-app-env: &app-env
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-environment
+    DATABASE_URL: postgresql+asyncpg://rastro:rastro@postgres:5432/rastro
+    GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.private-key.pem
+  volumes:
+    - ./secrets:/secrets:ro
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -6,7 +19,7 @@ services:
       POSTGRES_PASSWORD: rastro
       POSTGRES_DB: rastro
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -14,6 +27,41 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # One-shot and idempotent: Alembic migrations, then the Procrastinate schema (skipped when present).
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    image: rastro-worker
+    <<: *app-env
+    working_dir: /app/db
+    command: ["sh", "-c", "alembic upgrade head && python -m rastro_worker.schema"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: rastro-api
+    <<: *app-env
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    image: rastro-worker
+    <<: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   pgdata:

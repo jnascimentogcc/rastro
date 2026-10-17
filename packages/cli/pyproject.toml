@@ -1,13 +1,26 @@
 [project]
-name = "rastro-cli"
-version = "0.0.0"
-description = "Rastro command line: git hook capture of coding-agent sessions."
+name = "rastro"
+version = "0.1.0"
+description = "Rastro command line: git hook capture of coding-agent sessions and rules query."
+readme = "README.md"
 requires-python = ">=3.12"
+# Placeholder until a license is chosen; replace before the first public release.
+license = "LicenseRef-Proprietary"
+authors = [{ name = "Rastro maintainers" }]
+keywords = ["git", "ai", "claude-code", "business-rules", "code-review"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Version Control :: Git",
+]
 dependencies = [
     "typer>=0.12",
     "httpx>=0.27",
     "keyring>=25",
-    "rastro-session-parsers",
+    "rastro-session-parsers>=0.1.0,<0.2",
 ]
 
 [project.scripts]
@@ -19,3 +32,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rastro_cli"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/rastro_cli", "README.md"]
