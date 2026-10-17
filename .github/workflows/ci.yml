@@ -43,5 +43,5 @@ jobs:
       - name: Build the CLI wheels and the compose file
         run: |
           uv build --package rastro-session-parsers -o dist
-          uv build --package rastro -o dist
+          uv build --package rastro-cli -o dist
           docker compose config -q
