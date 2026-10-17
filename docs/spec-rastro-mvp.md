@@ -49,7 +49,7 @@ Provar, num repositório real, que conseguimos:
 | GitHub | GitHub App com `githubkit` | Webhooks de push e PR, comentários, async |
 | LLM | SDK `openai` (modelo configurável via `LLM_MODEL`) | Structured Outputs com schemas Pydantic |
 | Embeddings | API de embeddings da OpenAI (modelo via `EMBEDDING_MODEL`) | Mesmo fornecedor e mesma chave que o LLM |
-| CLI | Typer, distribuída via PyPI | `uvx rastro init` ou `pipx install rastro` |
+| CLI | Typer, distribuída via PyPI | `uvx --from rastro-cli rastro init` ou `pipx install rastro-cli` (o nome `rastro` já existe no PyPI; o comando continua a ser `rastro`) |
 | Frontend | Angular (fora do MVP, ver secção 13) | Interface web nas fases seguintes |
 | Ferramentas | uv (dependências e workspaces), Ruff, mypy, pytest | Rápido e consistente |
 

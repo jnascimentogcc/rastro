@@ -1,5 +1,5 @@
 [project]
-name = "rastro"
+name = "rastro-cli"
 version = "0.1.0"
 description = "Rastro command line: git hook capture of coding-agent sessions and rules query."
 readme = "README.md"

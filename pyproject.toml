@@ -23,7 +23,7 @@ rastro-api = { workspace = true }
 rastro-worker = { workspace = true }
 rastro-code-analysis = { workspace = true }
 rastro-session-parsers = { workspace = true }
-rastro = { workspace = true }
+rastro-cli = { workspace = true }
 rastro-github = { workspace = true }
 rastro-llm = { workspace = true }
 
