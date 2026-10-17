@@ -347,3 +347,20 @@ async def test_the_counterexample_is_kept_with_the_stored_finding(worker: Worker
     analysis = await worker.pr_analysis(PR)
     assert analysis is not None
     assert analysis.findings[0]["counterexample"] == "A Saturday 09:00 implant is now accepted."
+
+
+async def test_an_empty_llm_balance_skips_the_analysis_without_a_misleading_comment(
+    worker: WorkerContext,
+) -> None:
+    from rastro_llm import LLMQuotaError
+
+    await seeded(worker)
+    worker.stage_pull_request(PR, {AGENDA: AGENDA_SATURDAY}, {AGENDA: AGENDA_V1})
+    worker.llm.queue(LLMQuotaError("credit_balance_exhausted"))
+
+    result = await run(worker)  # does not raise
+
+    assert result.status == "skipped_quota" and not result.commented
+    assert len(worker.llm.calls) == 1  # no retry
+    assert worker.github.comments == {}  # silence must not read as "no rules affected"
+    assert await worker.pr_analysis(PR) is None

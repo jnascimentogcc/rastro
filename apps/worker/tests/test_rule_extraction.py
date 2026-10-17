@@ -6,7 +6,15 @@ from worker_support import WorkerContext, user_excerpt
 
 from rastro_db.models import LlmCall, RuleOrigin
 from rastro_db.models import Symbol as SymbolRow
-from rastro_llm import ExtractedRule, LLMError, LLMTransientError, RuleExtraction, hashing_embedding
+from rastro_llm import (
+    ExtractedRule,
+    FakeProvider,
+    LLMError,
+    LLMQuotaError,
+    LLMTransientError,
+    RuleExtraction,
+    hashing_embedding,
+)
 from rastro_worker import tasks
 from rastro_worker.app import app
 from rastro_worker.rule_extraction import extract_rules
@@ -491,3 +499,53 @@ async def test_a_transient_model_failure_propagates_so_the_job_can_be_retried(
             )
         )
     assert status != "analysis_failed"  # not given up: the retry will analyse it
+
+
+class QuotaOnEmbed(FakeProvider):
+    """The completion works but the embedding call finds the account empty."""
+
+    async def embed(self, texts: list[str], **kwargs: object) -> list[list[float]]:
+        raise LLMQuotaError("credit_balance_exhausted")
+
+
+async def test_an_empty_llm_balance_skips_the_commit_visibly_and_without_retrying(
+    worker: WorkerContext,
+) -> None:
+    await stage_friday_commit(worker)
+    worker.llm.queue(LLMQuotaError("credit_balance_exhausted"))
+
+    summary = await extract_rules(worker.deps, worker.repository_id, SHA2)  # does not raise
+
+    assert summary.status == "skipped_quota"
+    assert len(worker.llm.calls) == 1  # a retry cannot help
+    commit = await worker.commit(SHA2)
+    assert commit is not None and commit.analysis_status == "skipped_quota"
+    assert commit.analyzed_at is None
+    assert await worker.rules() == []
+
+
+async def test_a_quota_error_while_embedding_leaves_no_partial_rules(
+    worker: WorkerContext,
+) -> None:
+    await stage_friday_commit(worker)
+    worker.deps.llm = QuotaOnEmbed(responses=[RuleExtraction(rules=[rule()])])
+
+    summary = await extract_rules(worker.deps, worker.repository_id, SHA2)
+
+    assert summary.status == "skipped_quota"
+    assert await worker.rules() == []
+    commit = await worker.commit(SHA2)
+    assert commit is not None and commit.analysis_status == "skipped_quota"
+
+
+async def test_a_skipped_commit_is_analysed_once_the_balance_is_back(
+    worker: WorkerContext,
+) -> None:
+    await stage_friday_commit(worker)
+    worker.llm.queue(LLMQuotaError("credit_balance_exhausted"))
+    await extract_rules(worker.deps, worker.repository_id, SHA2)
+
+    worker.llm.queue(RuleExtraction(rules=[rule()]))
+    summary = await extract_rules(worker.deps, worker.repository_id, SHA2, force=True)
+
+    assert (summary.status, summary.created) == ("analyzed", 1)

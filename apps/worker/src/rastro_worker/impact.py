@@ -42,6 +42,7 @@ from rastro_llm import (
     ImpactContext,
     LLMError,
     LLMProvider,
+    LLMQuotaError,
     LLMTransientError,
     PromptFileDiff,
     PromptSymbol,
@@ -60,7 +61,8 @@ ATTEMPTS = 2
 
 @dataclass
 class ImpactResult:
-    status: str  # analyzed | skipped_no_llm | skipped_unknown_repository | skipped_budget
+    # analyzed | skipped_no_llm | skipped_unknown_repository | skipped_budget | skipped_quota
+    status: str
     candidates: int = 0
     assessed: int = 0
     reported: int = 0
@@ -111,7 +113,18 @@ async def analyze_pull_request(
         )
 
     result = ImpactResult("analyzed", candidates=len(candidates))
-    assessments = await _assess(deps, llm, repository_id, number, candidates, files, head)
+    try:
+        assessments = await _assess(deps, llm, repository_id, number, candidates, files, head)
+    except LLMQuotaError as error:
+        # No comment and no record: "nothing affected" must not be confused with "not analysed".
+        logger.error(
+            "impact analysis of PR #%d skipped: the LLM account has no credit left (%s). "
+            "Push to the PR again once it is topped up.",
+            number,
+            error,
+        )
+        result.status = "skipped_quota"
+        return result
     result.assessed = len(assessments)
 
     threshold = deps.impact.impact_threshold
@@ -316,6 +329,7 @@ async def _assess(
 ) -> list[tuple[_Candidate, str, ImpactAssessment]]:
     gate = asyncio.Semaphore(deps.impact.impact_concurrency)
     metadata = {"repository_id": str(repository_id), "pull_request": number}
+    quota_errors: list[LLMQuotaError] = []
 
     async def one(candidate: _Candidate) -> tuple[_Candidate, str, ImpactAssessment] | None:
         prompt = build_impact_prompt(_context(candidate, files, head))
@@ -325,6 +339,9 @@ async def _assess(
                     assessment = await llm.extract(
                         prompt, ImpactAssessment, purpose="impact", metadata=metadata
                     )
+                except LLMQuotaError as error:
+                    quota_errors.append(error)  # reported once, after the others have finished
+                    return None
                 except LLMTransientError:
                     raise  # the job retries later with backoff
                 except (LLMError, ValidationError) as error:
@@ -340,6 +357,8 @@ async def _assess(
         return None
 
     done = await asyncio.gather(*(one(c) for c in candidates))
+    if quota_errors:
+        raise quota_errors[0]
     return [d for d in done if d is not None]
 
 

@@ -4,12 +4,30 @@ import openai
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
-from rastro_llm.provider import LLMError, LLMTransientError, Usage, UsageSink
+from rastro_llm.provider import LLMError, LLMQuotaError, LLMTransientError, Usage, UsageSink
 from rastro_llm.settings import LLMSettings
+
+_QUOTA_CODES = frozenset(
+    {"insufficient_quota", "credit_balance_exhausted", "billing_hard_limit_reached"}
+)
+
+
+def _is_quota(error: Exception) -> bool:
+    """OpenAI answers an empty balance with HTTP 429, like a real rate limit, but with one of
+    these error codes; only the code tells them apart."""
+    if not isinstance(error, openai.RateLimitError):
+        return False
+    body = error.body if isinstance(error.body, dict) else {}
+    detail = body.get("error", body)
+    codes = {error.code, detail.get("code") if isinstance(detail, dict) else None}
+    return bool(codes & _QUOTA_CODES)
 
 
 def _wrap(error: Exception) -> LLMError:
-    """Rate limits, timeouts, connection problems and provider 5xx are transient."""
+    """Quota exhaustion is permanent; rate limits, timeouts, connection problems and provider 5xx
+    are transient."""
+    if _is_quota(error):
+        return LLMQuotaError(f"{type(error).__name__}: {error}")
     transient = isinstance(
         error, openai.RateLimitError | openai.APIConnectionError | openai.InternalServerError
     )  # APITimeoutError is an APIConnectionError

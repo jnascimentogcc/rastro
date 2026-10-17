@@ -14,6 +14,11 @@ class LLMTransientError(LLMError):
     as opposed to a refusal or an invalid answer, which a retry will not fix."""
 
 
+class LLMQuotaError(LLMError):
+    """The account has no credit or quota left. Not transient: retrying changes nothing until
+    someone tops it up, so jobs stop at once and mark the work as skipped for a later re-run."""
+
+
 @dataclass(frozen=True)
 class Usage:
     """One model call, as recorded for cost control (spec section 11)."""

@@ -32,6 +32,7 @@ from rastro_llm import (
     ExtractionContext,
     LLMError,
     LLMProvider,
+    LLMQuotaError,
     LLMTransientError,
     PromptExcerpt,
     PromptFileDiff,
@@ -55,7 +56,8 @@ _NOISE_FILES = re.compile(r"(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|\.min
 
 @dataclass
 class ExtractionSummary:
-    status: str  # analyzed | analysis_failed | skipped_no_session | skipped_no_llm | skipped_budget
+    # analyzed | analysis_failed | skipped_no_session | skipped_no_llm | skipped_budget | skipped_quota
+    status: str
     created: int = 0
     updated: int = 0
     discarded: int = 0
@@ -203,16 +205,28 @@ async def extract_rules(
         ],
         existing_rules=existing,
     )
-    extraction = await _ask_model(
-        llm, build_extraction_prompt(context), {"repository_id": str(repository_id), "sha": sha}
-    )
-    if extraction is None:
-        await _set_status(deps, repository_id, sha, "analysis_failed")
-        return ExtractionSummary("analysis_failed")
+    try:
+        extraction = await _ask_model(
+            llm, build_extraction_prompt(context), {"repository_id": str(repository_id), "sha": sha}
+        )
+        if extraction is None:
+            await _set_status(deps, repository_id, sha, "analysis_failed")
+            return ExtractionSummary("analysis_failed")
 
-    summary = await _apply(
-        deps, llm, repository_id, sha, sessions, extraction, ids, touched, sources, existing
-    )
+        # Embeddings are requested before anything is written, so a quota error here leaves the
+        # database untouched.
+        summary = await _apply(
+            deps, llm, repository_id, sha, sessions, extraction, ids, touched, sources, existing
+        )
+    except LLMQuotaError as error:
+        logger.error(
+            "rule extraction for commit %s skipped: the LLM account has no credit left (%s). "
+            "Top it up, then run `python -m rastro_worker.requeue` to analyse it.",
+            sha,
+            error,
+        )
+        await _set_status(deps, repository_id, sha, "skipped_quota")
+        return ExtractionSummary("skipped_quota")
     await _set_status(deps, repository_id, sha, "analyzed")
     return summary
 
@@ -326,8 +340,8 @@ async def _ask_model(
     for attempt in range(1, ATTEMPTS + 1):
         try:
             return await llm.extract(prompt, RuleExtraction, metadata=metadata)
-        except LLMTransientError:
-            raise  # the job retries later with backoff; the commit is not marked as failed
+        except (LLMQuotaError, LLMTransientError):
+            raise  # quota: skipped by the caller; transient: the job retries with backoff
         except (LLMError, ValidationError) as error:
             logger.warning("rule extraction attempt %d/%d failed: %s", attempt, ATTEMPTS, error)
     return None
