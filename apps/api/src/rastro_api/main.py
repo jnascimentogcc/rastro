@@ -25,6 +25,7 @@ def create_app(
     github_settings: GitHubSettings | None = None,
     llm: LLMProvider | None = None,
     use_env_llm: bool = True,
+    llm_monthly_token_budget: int | None = None,
 ) -> FastAPI:
     """Engine, job queue, GitHub settings and the embedding model for search are injectable for
     tests; by default they are built from DATABASE_URL, GITHUB_* and the LLM settings (search
@@ -38,8 +39,12 @@ def create_app(
         app.state.github_settings = github_settings or GitHubSettings()
         app.state.queue = queue or build_queue()
         app.state.llm = llm
+        app.state.llm_monthly_token_budget = llm_monthly_token_budget
         if llm is None and use_env_llm:
             settings = LLMSettings()
+            app.state.llm_monthly_token_budget = (
+                llm_monthly_token_budget or settings.llm_monthly_token_budget
+            )
             if settings.configured:
                 app.state.llm = OpenAIProvider(
                     settings, usage_sink=usage_recorder(app.state.session_factory)

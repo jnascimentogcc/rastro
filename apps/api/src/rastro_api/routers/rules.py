@@ -21,6 +21,7 @@ from rastro_api.schemas import (
     RuleListOut,
     RuleOut,
 )
+from rastro_db.budget import budget_exhausted
 from rastro_db.models import AgentSession, Commit, Rule, RuleAnchor, RuleOrigin
 from rastro_db.models import Symbol as SymbolRow
 from rastro_llm import LLMError, LLMProvider
@@ -56,10 +57,14 @@ def _anchored_in_file(path: str) -> ColumnElement[bool]:
     )
 
 
-async def _embed_query(request: Request, text: str, repository_id: uuid.UUID) -> list[float] | None:
+async def _embed_query(
+    request: Request, session: AsyncSession, text: str, repository_id: uuid.UUID
+) -> list[float] | None:
     provider: LLMProvider | None = request.app.state.llm
     if provider is None:
         return None
+    if await budget_exhausted(session, repository_id, request.app.state.llm_monthly_token_budget):
+        return None  # over the monthly budget: plain text search costs nothing
     try:
         vectors = await provider.embed([text], metadata={"repository_id": str(repository_id)})
     except LLMError:
@@ -93,7 +98,7 @@ async def list_rules(
 
     order: list[Any] = [Rule.updated_at.desc()]
     if q and q.strip():
-        vector = await _embed_query(request, q.strip(), repository.id)
+        vector = await _embed_query(request, session, q.strip(), repository.id)
         if vector is not None:
             search = "semantic"
             similarity = 1 - Rule.embedding.cosine_distance(vector)

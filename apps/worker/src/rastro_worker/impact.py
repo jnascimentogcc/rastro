@@ -42,6 +42,7 @@ from rastro_llm import (
     ImpactContext,
     LLMError,
     LLMProvider,
+    LLMTransientError,
     PromptFileDiff,
     PromptSymbol,
     build_impact_prompt,
@@ -59,7 +60,7 @@ ATTEMPTS = 2
 
 @dataclass
 class ImpactResult:
-    status: str  # analyzed | skipped_no_llm | skipped_unknown_repository
+    status: str  # analyzed | skipped_no_llm | skipped_unknown_repository | skipped_budget
     candidates: int = 0
     assessed: int = 0
     reported: int = 0
@@ -95,6 +96,8 @@ async def analyze_pull_request(
         repository = await session.get(Repository, repository_id)
     if repository is None or repository.installation_id == 0:
         return ImpactResult("skipped_unknown_repository")
+    if await deps.over_budget(repository_id):
+        return ImpactResult("skipped_budget")  # no model call, and no comment either
 
     files = await deps.github.get_pull_request_files(
         repository.installation_id, repository.full_name, number
@@ -322,6 +325,8 @@ async def _assess(
                     assessment = await llm.extract(
                         prompt, ImpactAssessment, purpose="impact", metadata=metadata
                     )
+                except LLMTransientError:
+                    raise  # the job retries later with backoff
                 except (LLMError, ValidationError) as error:
                     logger.warning(
                         "impact attempt %d/%d failed for rule %s: %s",

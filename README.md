@@ -106,8 +106,65 @@ tool's bin directory must be on the `PATH` git sees (`pipx ensurepath` / `uv too
 6. **Push a commit**: the API stores it and queues `analyze_commit`, which joins it with the
    session captured by `rastro` (same SHA) and refreshes the symbols of the files it touched.
 
-Webhooks: `ping`, `installation`, `installation_repositories` and `push` are handled;
-`pull_request` is accepted and ignored until phase 7.
+Webhooks: `ping`, `installation`, `installation_repositories`, `push` and `pull_request` are
+handled. Each delivery id (`X-GitHub-Delivery`) is stored in `webhook_deliveries`; a replay is
+answered `202` with `"duplicate": true` and does nothing (a delivery whose processing failed is
+not remembered, so GitHub's redelivery works).
+
+### App lifecycle and data retention
+
+| GitHub event | Repository `status` |
+| --- | --- |
+| `installation` created / `installation_repositories` added | `active` (initial index queued) |
+| `installation` suspend | `suspended` |
+| `installation` unsuspend | `active` (re-index queued: pushes were missed) |
+| `installation` deleted / `installation_repositories` removed | `uninstalled` |
+
+A repository that is not `active` is not analysed: push and pull request webhooks are ignored,
+queued jobs return immediately, and `POST /v1/sessions` answers `403` (the CLI keeps the capture
+pending). **Retention choice: nothing is deleted.** Rules, symbols, sessions and analyses are
+kept so a reinstall picks up where it left off, and `rastro rules` keeps working with the repo
+token. Remove a repository's data manually (delete the `repositories` row and its dependents) if
+a customer asks for erasure.
+
+GitHub truncates recursive trees of very large repositories (100,000 entries / 7 MB); the client
+detects `truncated` and walks the tree one directory per request instead.
+
+## Security: excerpts at rest and secret redaction
+
+`agent_sessions.excerpts` (pieces of private conversations) is encrypted by the application with
+Fernet before it reaches PostgreSQL. The column stays `jsonb`: an encrypted value is
+`{"v": 1, "ct": "..."}`, a plain list is a legacy row and is still readable, and the ORM always
+hands readers a list of dicts. Keys come from `EXCERPTS_ENCRYPTION_KEYS` (comma separated, the
+first encrypts, all decrypt). Without a key the API logs a warning and stores plaintext, which is
+only acceptable for local development. Reading encrypted data with a missing or wrong key raises
+`DecryptionError`.
+
+```bash
+uv run python -m rastro_db.crypto generate-key      # a new key
+uv run python -m rastro_db.crypto reencrypt         # encrypt plaintext rows / move rows to the primary key
+```
+
+Rotation: prepend the new key (`new,old`), deploy, run `reencrypt`, then drop the old key.
+Migration `0006` encrypts existing rows when a key is set while migrating.
+
+Before leaving the developer machine, text is scrubbed by `rastro_session_parsers.redact`: our
+own patterns plus the `detect-secrets` detectors (cloud, VCS, payment and messaging providers).
+
+## Reliability and cost control
+
+Jobs are retried with exponential backoff (30 s, 1 min, 2 min... capped at 30 min, 5 retries)
+only for transient failures: GitHub 5xx, 429 and rate limits (honouring `Retry-After`), network
+errors, model rate limits/timeouts/5xx and lost database connections. Permanent errors (GitHub
+401/403/404/422, model refusals, bad payloads) fail at once. Every decision is logged by
+`rastro_worker.retry` (`retry 2/5 in 60s` / `giving up` / `failed permanently`).
+
+`LLM_MONTHLY_TOKEN_BUDGET` caps the tokens (input + output, embeddings included) one repository
+may use per calendar month (UTC), summed from `llm_calls`. It is checked before a job starts:
+rule extraction marks the commit `skipped_budget` (re-run `rule_extraction` with `force` once
+there is budget), impact analysis returns `skipped_budget` without commenting, and `rastro rules
+--query` falls back to text search. A job already running can overshoot by what it spends itself.
+Unset or `0` means unlimited.
 
 ## Rule extraction (phase 5)
 

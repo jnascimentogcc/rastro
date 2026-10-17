@@ -4,10 +4,13 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 
 from githubkit.exception import GitHubException, RequestFailed
+from sqlalchemy import select
 
+from rastro_db.models import Repository
 from rastro_worker import impact, indexing, resync, rule_extraction
 from rastro_worker.app import app
 from rastro_worker.deps import get_deps
+from rastro_worker.retry import retry_transient
 
 logger = logging.getLogger(__name__)
 
@@ -37,22 +40,40 @@ def log_github_errors[**P](task: Callable[P, Awaitable[None]]) -> Callable[P, Aw
     return wrapper
 
 
+async def repository_is_active(repository_id: str) -> bool:
+    """Jobs of a repository whose App installation was removed or suspended are dropped (the
+    data stays, see the README). Queued jobs outlive the webhook that deactivated it."""
+    deps = get_deps()
+    async with deps.session_factory() as session:
+        status = await session.scalar(
+            select(Repository.status).where(Repository.id == uuid.UUID(repository_id))
+        )
+    if status is not None and status != "active":
+        logger.warning("skipping job for repository %s: it is %s", repository_id, status)
+        return False
+    return True  # unknown repositories are left to the job itself to report
+
+
 @app.task(name="ping")
 async def ping(message: str = "pong") -> str:
     """Smoke-test task proving the queue and the worker are wired up."""
     return message
 
 
-@app.task(name="index_repository")
+@app.task(name="index_repository", retry=retry_transient)
 @log_github_errors
 async def index_repository(repository_id: str) -> None:
+    if not await repository_is_active(repository_id):
+        return
     await indexing.index_repository(get_deps(), uuid.UUID(repository_id))
     await resync_anchors.configure(lock=repository_id).defer_async(repository_id=repository_id)
 
 
-@app.task(name="analyze_commit")
+@app.task(name="analyze_commit", retry=retry_transient)
 @log_github_errors
 async def analyze_commit(repository_id: str, sha: str, on_default_branch: bool = False) -> None:
+    if not await repository_is_active(repository_id):
+        return
     summary = await indexing.analyze_commit(
         get_deps(), uuid.UUID(repository_id), sha, on_default_branch
     )
@@ -64,21 +85,27 @@ async def analyze_commit(repository_id: str, sha: str, on_default_branch: bool =
         )
 
 
-@app.task(name="rule_extraction")
+@app.task(name="rule_extraction", retry=retry_transient)
 @log_github_errors
 async def extract_rules(repository_id: str, sha: str, force: bool = False) -> None:
     """Rule extraction for one commit; `analyze_commit` and late session uploads queue it."""
+    if not await repository_is_active(repository_id):
+        return
     await rule_extraction.extract_rules(get_deps(), uuid.UUID(repository_id), sha, force=force)
 
 
-@app.task(name="resync_anchors")
+@app.task(name="resync_anchors", retry=retry_transient)
 async def resync_anchors(repository_id: str) -> None:
     """Follow renamed/moved code with the rule anchors; orphan rules whose code is gone."""
+    if not await repository_is_active(repository_id):
+        return
     await resync.resync_anchors(get_deps(), uuid.UUID(repository_id))
 
 
-@app.task(name="analyze_pr")
+@app.task(name="analyze_pr", retry=retry_transient)
 @log_github_errors
 async def analyze_pr(repository_id: str, number: int, head_sha: str) -> None:
     """Impact analysis of a pull request; the single PR comment is edited in place."""
+    if not await repository_is_active(repository_id):
+        return
     await impact.analyze_pull_request(get_deps(), uuid.UUID(repository_id), number, head_sha)

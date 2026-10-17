@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ pytestmark = pytest.mark.db
 GITHUB_ID = 9_100_001
 OTHER_GITHUB_ID = 9_100_002
 SHA_A, SHA_B = "a" * 40, "b" * 40
+RUN = f"-{uuid.uuid4()}"  # delivery ids persist, so every test run needs fresh ones
 
 
 async def deliver(
@@ -25,9 +27,12 @@ async def deliver(
     *,
     secret: str | None = WEBHOOK_SECRET,
     body: bytes | None = None,
+    delivery_id: str | None = None,
 ) -> Response:
     raw = body if body is not None else json.dumps(payload).encode()
     headers = {"X-GitHub-Event": event, "Content-Type": "application/json"}
+    if delivery_id is not None:
+        headers["X-GitHub-Delivery"] = delivery_id
     if secret is not None:
         headers["X-Hub-Signature-256"] = sign(secret, raw)
     return await api.client.post("/webhooks/github", content=raw, headers=headers)
@@ -159,13 +164,126 @@ async def test_repositories_added_to_an_existing_installation_are_indexed(api: A
     assert len(api.jobs("index_repository")) == 1
 
 
-async def test_installation_deleted_is_not_acted_upon_yet(api: ApiContext) -> None:
+async def install(api: ApiContext) -> None:
+    payload = {
+        "action": "created",
+        "installation": {"id": 4242},
+        "repositories": [
+            {"id": GITHUB_ID, "full_name": "acme/one"},
+            {"id": OTHER_GITHUB_ID, "full_name": "acme/two"},
+        ],
+    }
+    await deliver(api, "installation", payload)
+    api.queue.jobs.clear()
+
+
+async def statuses(api: ApiContext) -> dict[int, str]:
+    async with create_session_factory(api.engine)() as session:
+        rows = await session.execute(
+            select(Repository.github_id, Repository.status).where(
+                Repository.github_id.in_([GITHUB_ID, OTHER_GITHUB_ID])
+            )
+        )
+    return {github_id: status for github_id, status in rows}
+
+
+async def test_installation_deleted_marks_repositories_uninstalled_and_keeps_them(
+    api: ApiContext,
+) -> None:
+    await install(api)
     payload = {"action": "deleted", "installation": {"id": 4242}, "repositories": []}
 
     response = await deliver(api, "installation", payload)
 
-    assert response.json()["handled"] is False
+    assert response.json()["handled"] is True
+    assert await statuses(api) == {GITHUB_ID: "uninstalled", OTHER_GITHUB_ID: "uninstalled"}
+    assert api.queue.jobs == {}  # nothing is analysed any more
+
+
+async def test_suspend_pauses_and_unsuspend_resumes_with_a_fresh_index(api: ApiContext) -> None:
+    await install(api)
+
+    await deliver(api, "installation", {"action": "suspend", "installation": {"id": 4242}})
+    assert set((await statuses(api)).values()) == {"suspended"}
+
+    await deliver(api, "installation", {"action": "unsuspend", "installation": {"id": 4242}})
+
+    assert set((await statuses(api)).values()) == {"active"}
+    assert len(api.jobs("index_repository")) == 2  # pushes during the suspension were missed
+
+
+async def test_removing_a_repository_from_the_installation_only_affects_that_repository(
+    api: ApiContext,
+) -> None:
+    await install(api)
+    payload = {
+        "action": "removed",
+        "installation": {"id": 4242},
+        "repositories_removed": [{"id": OTHER_GITHUB_ID, "full_name": "acme/two"}],
+    }
+
+    await deliver(api, "installation_repositories", payload)
+
+    assert await statuses(api) == {GITHUB_ID: "active", OTHER_GITHUB_ID: "uninstalled"}
+
+
+async def test_reinstalling_reactivates_the_repositories(api: ApiContext) -> None:
+    await install(api)
+    await deliver(api, "installation", {"action": "deleted", "installation": {"id": 4242}})
+
+    await install(api)
+
+    assert set((await statuses(api)).values()) == {"active"}
+
+
+async def test_events_of_inactive_repositories_are_ignored(api: ApiContext) -> None:
+    await install(api)
+    await deliver(api, "installation", {"action": "suspend", "installation": {"id": 4242}})
+
+    pushed = await deliver(api, "push", push_payload())
+    opened = await deliver(api, "pull_request", pull_request_payload())
+
+    assert pushed.json()["handled"] is False and opened.json()["handled"] is False
+    assert await stored_commits(api) == []
     assert api.queue.jobs == {}
+
+
+async def test_a_replayed_delivery_is_ignored(api: ApiContext) -> None:
+    first = await deliver(api, "push", push_payload(), delivery_id="delivery-1" + RUN)
+    api.queue.jobs.clear()
+
+    replay = await deliver(api, "push", push_payload(), delivery_id="delivery-1" + RUN)
+
+    assert first.json()["handled"] is True
+    assert replay.status_code == 202 and replay.json()["duplicate"] is True
+    assert api.queue.jobs == {}
+
+
+async def test_different_deliveries_with_the_same_content_are_both_processed(
+    api: ApiContext,
+) -> None:
+    await deliver(api, "push", push_payload(), delivery_id="delivery-a" + RUN)
+    second = await deliver(api, "push", push_payload(), delivery_id="delivery-b" + RUN)
+
+    assert second.json().get("duplicate") is None and second.json()["handled"] is True
+
+
+async def test_a_failed_delivery_is_not_remembered_so_github_can_redeliver_it(
+    api: ApiContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rastro_api.routers import github as router
+
+    async def boom(*args: object, **kwargs: object) -> bool:
+        raise RuntimeError("database hiccup")
+
+    monkeypatch.setitem(router._HANDLERS, "push", boom)
+    with pytest.raises(RuntimeError):
+        await deliver(api, "push", push_payload(), delivery_id="delivery-x" + RUN)
+    monkeypatch.undo()
+
+    retry = await deliver(api, "push", push_payload(), delivery_id="delivery-x" + RUN)
+
+    assert retry.json()["handled"] is True
 
 
 async def test_push_to_default_branch_stores_commits_and_queues_analysis(api: ApiContext) -> None:

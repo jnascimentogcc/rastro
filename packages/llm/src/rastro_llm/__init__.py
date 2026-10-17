@@ -9,7 +9,7 @@ from rastro_llm.prompts import (
     PromptSymbol,
     build_extraction_prompt,
 )
-from rastro_llm.provider import LLMError, LLMProvider, Usage, UsageSink
+from rastro_llm.provider import LLMError, LLMProvider, LLMTransientError, Usage, UsageSink
 from rastro_llm.schemas import ExtractedRule, ImpactAssessment, Risk, RuleExtraction
 from rastro_llm.settings import LLMSettings
 
@@ -22,6 +22,7 @@ __all__ = [
     "LLMError",
     "LLMProvider",
     "LLMSettings",
+    "LLMTransientError",
     "OpenAIProvider",
     "PromptExcerpt",
     "PromptFileDiff",

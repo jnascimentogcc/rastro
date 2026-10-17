@@ -6,7 +6,7 @@ from worker_support import WorkerContext, user_excerpt
 
 from rastro_db.models import LlmCall, RuleOrigin
 from rastro_db.models import Symbol as SymbolRow
-from rastro_llm import ExtractedRule, LLMError, RuleExtraction, hashing_embedding
+from rastro_llm import ExtractedRule, LLMError, LLMTransientError, RuleExtraction, hashing_embedding
 from rastro_worker import tasks
 from rastro_worker.app import app
 from rastro_worker.rule_extraction import extract_rules
@@ -469,3 +469,25 @@ async def test_only_user_intent_text_can_justify_a_rationale(worker: WorkerConte
 
     [stored] = await worker.rules()
     assert stored.rationale is None
+
+
+async def test_a_transient_model_failure_propagates_so_the_job_can_be_retried(
+    worker: WorkerContext,
+) -> None:
+    import pytest
+
+    await stage_friday_commit(worker)
+    worker.llm.queue(LLMTransientError("429 rate limited"))
+
+    with pytest.raises(LLMTransientError):
+        await extract_rules(worker.deps, worker.repository_id, SHA2)
+
+    async with worker.deps.session_factory() as session:
+        from rastro_db.models import Commit
+
+        status = await session.scalar(
+            select(Commit.analysis_status).where(
+                Commit.repository_id == worker.repository_id, Commit.sha == SHA2
+            )
+        )
+    assert status != "analysis_failed"  # not given up: the retry will analyse it

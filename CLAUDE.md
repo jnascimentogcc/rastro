@@ -53,10 +53,19 @@ PR impact (`apps/worker/src/rastro_worker/impact.py`, `comment.py`): `pull_reque
 
 Rules query (`apps/api/src/rastro_api/routers/rules.py`, `packages/cli/src/rastro_cli/render.py`): the repository id in the URL must equal the token's repository (else 404, same as unknown). `q` embeds the query with `app.state.llm` (the configured provider; `create_app(llm=..., use_env_llm=False)` for tests) and keeps cosine similarity >= 0.3; on no model or `LLMError` it falls back to an escaped, case-insensitive `ILIKE` on statement and rationale (`search` in the response says which one ran). `file` matches an exact path or a directory prefix, over anchors of any status (so orphaned rules are found by their old file). Detail lists anchors primary-first. The CLI caches `repository_id` in `.rastro/config.json` (fetched with whoami on first use for configs written by older versions), turns `--file` into a repo-relative `/` path from the current directory, and resolves `rastro rule <prefix>` by listing.
 
+## Hardening
+
+- `rastro_db.crypto`: `agent_sessions.excerpts` uses the `EncryptedExcerpts` column type (jsonb envelope `{"v","ct"}`, Fernet/MultiFernet, keys in `EXCERPTS_ENCRYPTION_KEYS`; plaintext lists stay readable; no key = plaintext + warning). The root `conftest.py` sets a throwaway key so every DB test runs encrypted. Never query `excerpts` with raw SQL expecting JSON content.
+- `redact()` = own regexes, then `detect-secrets` plugins (no entropy plugins); library failure falls back to the regexes.
+- `apps/worker/src/rastro_worker/retry.py`: `retry_transient` on all five pipeline tasks; `is_transient` decides (GitHub 5xx/429/rate limit/timeouts, `LLMTransientError`, connection loss). Transient `LLMTransientError` propagates out of extraction/impact (job retries) instead of becoming `analysis_failed`.
+- `repositories.status` (`active|suspended|uninstalled`) gates webhooks, jobs (`tasks.repository_is_active`) and `POST /v1/sessions` (403). Data is never deleted. `webhook_deliveries` holds processed delivery ids (inserted in the handler's transaction).
+- `GithubKitClient.list_files` walks the tree per directory when GitHub reports `truncated`.
+- Token budget: `LLM_MONTHLY_TOKEN_BUDGET`, `rastro_db.budget`, `WorkerDeps.over_budget`; statuses `skipped_budget` (commit `analysis_status`, `ExtractionSummary`, `ImpactResult`).
+
 ## Spec rules to respect
 
 - LLM access only through `LLMProvider` (`packages/llm`); tests use a `FakeProvider`. Never invent a rule's `rationale` (null when the conversation does not explain it); drop rules with `confidence < 0.5`.
 - Session parsing (§7.2) quirks: user rows can be tool results or compaction/command noise, not intent (only `origin.kind == "human"`); assistant responses are split across rows sharing `message.id` (not necessarily adjacent); deduplicate by `uuid`; follow `logicalParentUuid` across compactions; `gitBranch`/`cwd` vary per message; discard denied or `is_error` edits and edits outside the repo root.
-- Never send `tool_result`/`toolUseResult`, `thinking` blocks or `attachment` rows to the server; scrub secrets first; encrypt `excerpts` at rest.
+- Never send `tool_result`/`toolUseResult`, `thinking` blocks or `attachment` rows to the server; scrub secrets first; encrypt `excerpts` at rest (done, see Hardening).
 - Webhooks: verify HMAC SHA-256 with `hmac.compare_digest`, answer 202, enqueue.
 - MVP scope: TypeScript/JavaScript, Claude Code, GitHub only; no web UI.

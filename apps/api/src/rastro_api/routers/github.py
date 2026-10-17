@@ -12,13 +12,13 @@ from typing import Any
 
 import procrastinate
 from fastapi import APIRouter, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from rastro_api.deps import DbSession
 from rastro_api.queueing import enqueue
-from rastro_db.models import Commit, Repository
+from rastro_db.models import Commit, Repository, WebhookDelivery
 from rastro_github import GitHubSettings, verify_signature
 
 logger = logging.getLogger(__name__)
@@ -45,11 +45,29 @@ async def github_webhook(request: Request, session: DbSession) -> dict[str, Any]
 
     event = request.headers.get("x-github-event", "")
     action = payload.get("action") if isinstance(payload, dict) else None
+    delivery_id = request.headers.get("x-github-delivery")
+    if delivery_id and not await _first_delivery(session, delivery_id, event):
+        logger.info("webhook %s (%s) already processed, ignoring the replay", delivery_id, event)
+        return {"event": event, "action": action, "handled": False, "duplicate": True}
     handler = _HANDLERS.get(event)
-    if handler is None:
-        return {"event": event, "action": action, "handled": False}
-    handled = await handler(payload, session, request.app.state.queue)
+    handled = False
+    if handler is not None:
+        handled = await handler(payload, session, request.app.state.queue)
+    await session.commit()  # also records the delivery when the handler committed nothing
     return {"event": event, "action": action, "handled": handled}
+
+
+async def _first_delivery(session: AsyncSession, delivery_id: str, event: str) -> bool:
+    """Record the delivery id; False when it was seen before. The row is committed together
+    with the handler's changes (or rolled back with them if the handler fails, so GitHub's
+    redelivery of that same id is processed). A concurrent replay waits on the unique key."""
+    inserted = await session.scalar(
+        insert(WebhookDelivery)
+        .values(delivery_id=delivery_id, event=event)
+        .on_conflict_do_nothing(index_elements=["delivery_id"])
+        .returning(WebhookDelivery.delivery_id)
+    )
+    return inserted is not None
 
 
 # --------------------------------------------------------------------------- handlers
@@ -62,6 +80,7 @@ async def _upsert_repository(
     full_name: str,
     installation_id: int,
     default_branch: str | None = None,
+    activate: bool = False,
 ) -> uuid.UUID:
     values = {
         "github_id": github_id,
@@ -73,6 +92,9 @@ async def _upsert_repository(
     updates = {"full_name": statement.excluded.full_name, "installation_id": installation_id}
     if default_branch:
         updates["default_branch"] = statement.excluded.default_branch
+    if activate:  # (re)installed: back in business, whatever the previous status was
+        updates["status"] = "active"
+        updates["status_changed_at"] = func.now()
     result = await session.execute(
         statement.on_conflict_do_update(index_elements=["github_id"], set_=updates).returning(
             Repository.id
@@ -91,11 +113,37 @@ async def _on_installation_repositories(
     payload: dict[str, Any], session: AsyncSession, queue: procrastinate.App
 ) -> bool:
     """`installation` (created) lists `repositories`; `installation_repositories` (added)
-    lists `repositories_added`. Both register the repositories and start the initial index."""
+    lists `repositories_added`. Both register the repositories and start the initial index.
+    Lifecycle actions (deleted, suspend, unsuspend, removed) change the repository status;
+    repositories that are not `active` are never analysed, but their data is kept."""
     action = payload.get("action")
-    if action not in ("created", "added"):
-        return False  # deleted/removed/suspend...: kept for later phases
     installation_id = int(payload["installation"]["id"])
+    if action in ("deleted", "suspend"):
+        status_ = "uninstalled" if action == "deleted" else "suspended"
+        await _set_status(session, Repository.installation_id == installation_id, status_)
+        await session.commit()
+        return True
+    if action == "unsuspend":
+        resumed = await _set_status(
+            session,
+            (Repository.installation_id == installation_id) & (Repository.status == "suspended"),
+            "active",
+        )
+        await session.commit()
+        for repository_id in resumed:  # pushes during the suspension were never seen
+            await enqueue(queue, "index_repository", repository_id)
+        return True
+    if action == "removed":
+        gone = [int(item["id"]) for item in payload.get("repositories_removed") or []]
+        await _set_status(
+            session,
+            (Repository.installation_id == installation_id) & Repository.github_id.in_(gone),
+            "uninstalled",
+        )
+        await session.commit()
+        return True
+    if action not in ("created", "added"):
+        return False
     listed = payload.get("repositories_added") or payload.get("repositories") or []
     repository_ids = [
         await _upsert_repository(
@@ -103,6 +151,7 @@ async def _on_installation_repositories(
             github_id=int(item["id"]),
             full_name=item["full_name"],
             installation_id=installation_id,
+            activate=True,
         )
         for item in listed
     ]
@@ -110,6 +159,26 @@ async def _on_installation_repositories(
     for repository_id in repository_ids:
         await enqueue(queue, "index_repository", repository_id)
     return True
+
+
+async def _set_status(session: AsyncSession, where: Any, status_: str) -> list[uuid.UUID]:
+    """Change the status of the matching repositories (only those that are not already there)."""
+    result = await session.execute(
+        update(Repository)
+        .where(where, Repository.status != status_)
+        .values(status=status_, status_changed_at=func.now())
+        .returning(Repository.id)
+    )
+    changed = list(result.scalars())
+    logger.info("repositories set to %s: %d", status_, len(changed))
+    return changed
+
+
+async def _is_active(session: AsyncSession, repository_id: uuid.UUID) -> bool:
+    return (
+        await session.scalar(select(Repository.status).where(Repository.id == repository_id))
+        == "active"
+    )
 
 
 async def _on_push(
@@ -128,6 +197,9 @@ async def _on_push(
         or await _known_installation(session, int(repo["id"])),
         default_branch=repo.get("default_branch"),
     )
+    if not await _is_active(session, repository_id):
+        await session.commit()
+        return False
 
     # `commits` holds at most 20 entries; the head commit is always covered.
     commits: dict[str, dict[str, Any]] = {c["id"]: c for c in payload.get("commits") or []}
@@ -187,6 +259,8 @@ async def _on_pull_request(
         default_branch=repo.get("default_branch"),
     )
     await session.commit()
+    if not await _is_active(session, repository_id):
+        return False
     number = int(payload["number"])
     # A job already waiting for this PR will read its latest state, so do not stack another.
     await enqueue(

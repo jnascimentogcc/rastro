@@ -122,6 +122,56 @@ async def test_lists_only_blobs_of_the_tree(private_key_pem: str) -> None:  # in
     assert [(f.path, f.blob_sha, f.size) for f in files] == [("src/a.ts", "b1", 42)]
 
 
+def tree_json(sha: str, entries: list[tuple[str, str, str]], truncated: bool = False) -> object:
+    return {
+        "sha": sha,
+        "url": "u",
+        "truncated": truncated,
+        "tree": [
+            {
+                "path": path,
+                "mode": "040000" if kind == "tree" else "100644",
+                "type": kind,
+                "sha": entry_sha,
+                "size": 1,
+                "url": "u",
+            }
+            for path, kind, entry_sha in entries
+        ],
+    }
+
+
+async def test_truncated_tree_is_walked_directory_by_directory(private_key_pem: str) -> None:
+    requests: list[tuple[str, bool]] = []
+    trees = {
+        "root": [("README.md", "blob", "b0"), ("src", "tree", "t-src")],
+        "t-src": [("a.ts", "blob", "b1"), ("deep", "tree", "t-deep")],
+        "t-deep": [("b.ts", "blob", "b2")],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        sha = request.url.path.rsplit("/", 1)[1]
+        recursive = "recursive" in request.url.params
+        requests.append((sha, recursive))
+        if recursive:  # GitHub gave up: only part of the files, flagged as truncated
+            return httpx.Response(200, json=tree_json(sha, [("README.md", "blob", "b0")], True))
+        return httpx.Response(200, json=tree_json(sha, trees[sha]))
+
+    client = make_client(private_key_pem, httpx.MockTransport(handler))
+
+    files = await client.list_files(100, "acme/big", "root")
+
+    assert {(f.path, f.blob_sha) for f in files} == {
+        ("README.md", "b0"),
+        ("src/a.ts", "b1"),
+        ("src/deep/b.ts", "b2"),
+    }
+    assert requests[0] == ("root", True)  # tried the recursive call first
+    assert {sha for sha, recursive in requests if not recursive} == {"root", "t-src", "t-deep"}
+
+
 def test_private_key_accepts_escaped_newlines_and_files(tmp_path, private_key_pem: str) -> None:  # type: ignore[no-untyped-def]
     escaped = GitHubSettings(github_app_private_key=SecretStr(private_key_pem.replace("\n", "\\n")))
     path = tmp_path / "key.pem"

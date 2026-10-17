@@ -1,11 +1,20 @@
 """Best-effort secret scrubbing applied to every text before it leaves the machine.
 
-Pattern based: it catches well-known token formats, credentials in URLs and `NAME=value`
-assignments with sensitive names. It cannot catch every secret, which is why tool results,
-file contents and edit payloads are never sent in the first place.
+Two layers. Our own patterns catch well-known token formats, credentials in URLs and
+`NAME=value` assignments with sensitive names. Then the `detect-secrets` plugins (maintained
+detectors for cloud, VCS, payment and messaging providers) catch what the patterns do not know
+about. Entropy-based plugins are left out on purpose: in prose they flag identifiers and hashes.
+Neither layer can catch every secret, which is why tool results, file contents and edit
+payloads are never sent in the first place.
 """
 
+import logging
 import re
+
+from detect_secrets.core.scan import scan_line
+from detect_secrets.settings import transient_settings
+
+logger = logging.getLogger(__name__)
 
 REDACTED = "[REDACTED]"
 
@@ -38,10 +47,56 @@ _SENSITIVE_ASSIGNMENT = re.compile(
 )
 
 
+_DETECTORS = [
+    "AWSKeyDetector",
+    "ArtifactoryDetector",
+    "AzureStorageKeyDetector",
+    "BasicAuthDetector",
+    "CloudantDetector",
+    "DiscordBotTokenDetector",
+    "GitHubTokenDetector",
+    "GitLabTokenDetector",
+    "IbmCloudIamDetector",
+    "IbmCosHmacDetector",
+    "JwtTokenDetector",
+    "MailchimpDetector",
+    "NpmDetector",
+    "OpenAIDetector",
+    "PrivateKeyDetector",
+    "PypiTokenDetector",
+    "SendGridDetector",
+    "SlackDetector",
+    "SoftlayerDetector",
+    "SquareOAuthDetector",
+    "StripeDetector",
+    "TelegramBotTokenDetector",
+    "TwilioKeyDetector",
+]
+_SETTINGS = {"plugins_used": [{"name": name} for name in _DETECTORS]}
+_MIN_SECRET_LENGTH = 8  # some plugins report only a prefix of the match; never redact that
+
+
+def _detected_secrets(text: str) -> set[str]:
+    found: set[str] = set()
+    try:
+        with transient_settings(_SETTINGS):
+            for line in text.splitlines():
+                for secret in scan_line(line):
+                    value = secret.secret_value
+                    if value and len(value) >= _MIN_SECRET_LENGTH:
+                        found.add(value)
+    except Exception:  # the library must never break a capture
+        logger.warning("secret detection failed; relying on pattern redaction", exc_info=True)
+    return found
+
+
 def redact(text: str) -> str:
     for pattern in _WHOLE_MATCH_PATTERNS:
         text = pattern.sub(REDACTED, text)
     text = _URL_CREDENTIALS.sub(lambda m: f"{m['head']}{REDACTED}{m['tail']}", text)
-    return _SENSITIVE_ASSIGNMENT.sub(
+    text = _SENSITIVE_ASSIGNMENT.sub(
         lambda m: f"{m['name']}{m['sep']}{REDACTED}" if m["value"] != REDACTED else m[0], text
     )
+    for secret in sorted(_detected_secrets(text), key=len, reverse=True):
+        text = text.replace(secret, REDACTED)
+    return text

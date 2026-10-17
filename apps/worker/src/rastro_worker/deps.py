@@ -1,16 +1,20 @@
 """Runtime dependencies of the tasks, built lazily so importing the task module is free and
 tests can inject fakes with `set_deps`."""
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rastro_db import create_engine, create_session_factory
+from rastro_db.budget import budget_exhausted
 from rastro_db.models import LlmCall
 from rastro_github import GitHubClient, GithubKitClient, GitHubSettings
 from rastro_llm import LLMProvider, LLMSettings, OpenAIProvider, Usage, UsageSink
 from rastro_worker.settings import ImpactSettings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -19,6 +23,20 @@ class WorkerDeps:
     github: GitHubClient
     llm: LLMProvider | None = None  # None when no model is configured
     impact: ImpactSettings = field(default_factory=ImpactSettings)
+    monthly_token_budget: int | None = None  # per repository; None = unlimited
+
+    async def over_budget(self, repository_id: uuid.UUID) -> bool:
+        if not self.monthly_token_budget:
+            return False
+        async with self.session_factory() as session:
+            exhausted = await budget_exhausted(session, repository_id, self.monthly_token_budget)
+        if exhausted:
+            logger.warning(
+                "repository %s used its monthly budget of %d LLM tokens; skipping model work",
+                repository_id,
+                self.monthly_token_budget,
+            )
+        return exhausted
 
 
 def usage_recorder(session_factory: async_sessionmaker[AsyncSession]) -> UsageSink:
@@ -57,6 +75,7 @@ def get_deps() -> WorkerDeps:
                 if llm_settings.configured
                 else None
             ),
+            monthly_token_budget=llm_settings.llm_monthly_token_budget,
         )
     return _deps
 

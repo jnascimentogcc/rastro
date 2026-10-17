@@ -9,6 +9,11 @@ class LLMError(RuntimeError):
     """The model call failed, was refused, or returned something that does not validate."""
 
 
+class LLMTransientError(LLMError):
+    """A failure that is worth retrying later (rate limit, timeout, connection, provider 5xx),
+    as opposed to a refusal or an invalid answer, which a retry will not fix."""
+
+
 @dataclass(frozen=True)
 class Usage:
     """One model call, as recorded for cost control (spec section 11)."""
