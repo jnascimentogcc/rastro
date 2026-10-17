@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2.9",
     "rastro-db",
     "rastro-github",
+    "rastro-llm",
     "rastro-worker",
 ]
 

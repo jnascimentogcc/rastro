@@ -104,6 +104,24 @@ The GitHub App needs *Pull requests: read and write* (already in the setup above
 that the evaluation runs after the commits; the criterion is fewer than 1 irrelevant comment per 5
 PRs. `--runs 3` reports it per run.
 
+## Querying the rules (phase 8)
+
+```bash
+rastro rules                                   # active rules of this repository, with the reason behind each
+rastro rules --file src/agenda.ts              # rules anchored in a file (or a folder); path relative to where you are
+rastro rules --search "can implants be booked on fridays"   # semantic search; plain text match without an embedding model
+rastro rules --status orphaned                 # active (default), orphaned, superseded or all
+rastro rules --limit 50 --json                 # raw server response
+rastro rule 4f3e2d1c                           # one rule: code anchors (primary/duplicate) and the commits behind it
+```
+
+A rule whose conversation never said why shows "unknown origin" instead of a guessed reason.
+The server exposes the same data at `GET /v1/repos/{id}/rules` (filters `file`, `status`, `q`,
+`limit`, `offset`) and `GET /v1/repos/{id}/rules/{rule_id}`, authenticated with the repository
+token. Semantic search embeds the query with the configured `EMBEDDING_MODEL` and keeps matches
+above 0.3 cosine similarity; if the server has no embedding model, or the call fails, it falls
+back to a case-insensitive text match on the statement and the reason.
+
 Checks (the same ones CI runs):
 
 ```bash

@@ -23,3 +23,34 @@ def whoami(token: str, api_url: str) -> dict[str, Any]:
         response.raise_for_status()
         result: dict[str, Any] = response.json()
         return result
+
+
+def list_rules(
+    token: str,
+    api_url: str,
+    repository_id: str,
+    *,
+    file: str | None = None,
+    search: str | None = None,
+    status: str = "active",
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"status": status, "limit": limit, "offset": offset}
+    if file:
+        params["file"] = file
+    if search:
+        params["q"] = search
+    with make_client(token, api_url) as client:
+        response = client.get(f"/v1/repos/{repository_id}/rules", params=params)
+        response.raise_for_status()
+        result: dict[str, Any] = response.json()
+        return result
+
+
+def get_rule(token: str, api_url: str, repository_id: str, rule_id: str) -> dict[str, Any]:
+    with make_client(token, api_url) as client:
+        response = client.get(f"/v1/repos/{repository_id}/rules/{rule_id}")
+        response.raise_for_status()
+        result: dict[str, Any] = response.json()
+        return result

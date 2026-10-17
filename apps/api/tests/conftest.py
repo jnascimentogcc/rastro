@@ -10,8 +10,9 @@ from sqlalchemy import delete, select
 
 from rastro_api.main import create_app
 from rastro_db import create_engine, create_session_factory, generate_token, hash_token
-from rastro_db.models import AgentSession, Commit, Repository
+from rastro_db.models import AgentSession, Commit, Repository, Rule, Symbol
 from rastro_github import GitHubSettings
+from rastro_llm import FakeProvider
 from rastro_worker.app import build_app
 
 
@@ -39,6 +40,7 @@ async def api() -> AsyncIterator[ApiContext]:
         engine,
         queue=build_app(connector),
         github_settings=GitHubSettings(github_webhook_secret=SecretStr(WEBHOOK_SECRET)),
+        llm=FakeProvider(),
     )
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
@@ -52,6 +54,8 @@ async def api() -> AsyncIterator[ApiContext]:
             )
         ).all()
         for rid in [repository_id, *created]:
+            await session.execute(delete(Rule).where(Rule.repository_id == rid))
+            await session.execute(delete(Symbol).where(Symbol.repository_id == rid))
             await session.execute(delete(AgentSession).where(AgentSession.repository_id == rid))
             await session.execute(delete(Commit).where(Commit.repository_id == rid))
             await session.execute(delete(Repository).where(Repository.id == rid))
