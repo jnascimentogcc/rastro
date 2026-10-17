@@ -146,3 +146,17 @@ async def test_excerpts_are_encrypted_in_the_database(api: ApiContext) -> None:
 
     assert raw is not None and "Implants" not in raw and '"ct"' in raw
     assert stored is not None and stored.excerpts[0]["text"].startswith("Implants")
+
+
+@pytest.mark.parametrize(("flag", "queued"), [(True, 1), (None, 1), (False, 0)])
+async def test_a_late_session_queues_extraction_only_when_the_commit_may_be_analysed(
+    api: ApiContext, flag: bool | None, queued: int
+) -> None:
+    from rastro_db.models import Commit
+
+    async with create_session_factory(api.engine)() as session, session.begin():
+        session.add(Commit(repository_id=api.repository_id, sha="a" * 40, on_default_branch=flag))
+
+    await api.client.post("/v1/sessions", json=PAYLOAD, headers=auth(api.token))
+
+    assert len(api.jobs("rule_extraction")) == queued  # a feature-branch commit waits for the merge

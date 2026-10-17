@@ -79,7 +79,7 @@ async def analyze_commit(repository_id: str, sha: str, on_default_branch: bool =
     )
     if on_default_branch:
         await resync_anchors.configure(lock=repository_id).defer_async(repository_id=repository_id)
-    if summary.get("sessions"):
+    if on_default_branch and summary.get("sessions"):
         await extract_rules.configure(lock=repository_id).defer_async(
             repository_id=repository_id, sha=sha
         )

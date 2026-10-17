@@ -451,7 +451,7 @@ async def test_analyze_commit_task_queues_extraction_only_when_sessions_exist(
     connector = testing.InMemoryConnector()
     with app.replace_connector(connector) as test_app:
         async with test_app.open_async():
-            await tasks.analyze_commit(str(worker.repository_id), SHA2, False)
+            await tasks.analyze_commit(str(worker.repository_id), SHA2, True)
             await tasks.analyze_commit(str(worker.repository_id), SHA3, False)
 
     jobs = [j for j in connector.jobs.values() if j["task_name"] == "rule_extraction"]
@@ -568,3 +568,57 @@ async def test_a_changed_module_constant_makes_the_functions_using_it_candidates
     prompt = worker.llm.calls[0].prompt
     assert '<symbol key="src/agenda.ts::validate"' in prompt
     assert "+const LIMIT = 12;" in prompt
+
+
+async def test_a_feature_branch_commit_waits_for_the_merge(worker: WorkerContext) -> None:
+    """Rules describe the default branch: a PR must not be compared with rules its own session
+    already rewrote, and an abandoned PR must not change them."""
+    await stage_friday_commit(worker)
+    await worker.set_on_default_branch(SHA2, False)
+    connector = testing.InMemoryConnector()
+
+    with app.replace_connector(connector) as test_app:
+        async with test_app.open_async():
+            await tasks.analyze_commit(str(worker.repository_id), SHA2, False)
+
+    assert [j for j in connector.jobs.values() if j["task_name"] == "rule_extraction"] == []
+    commit = await worker.commit(SHA2)
+    assert commit is not None and commit.analysis_status == "awaiting_merge"
+    assert worker.llm.calls == [] and await worker.rules() == []
+
+
+async def test_extraction_itself_refuses_a_feature_branch_commit_unless_forced(
+    worker: WorkerContext,
+) -> None:
+    await stage_friday_commit(worker)
+    await worker.set_on_default_branch(SHA2, False)
+
+    deferred = await extract_rules(worker.deps, worker.repository_id, SHA2)
+
+    assert deferred.status == "awaiting_merge" and worker.llm.calls == []
+    worker.llm.queue(RuleExtraction(rules=[rule()]))
+    forced = await extract_rules(worker.deps, worker.repository_id, SHA2, force=True)
+    assert (forced.status, forced.created) == ("analyzed", 1)
+
+
+async def test_the_merge_releases_a_waiting_commit(worker: WorkerContext) -> None:
+    await stage_friday_commit(worker)
+    await worker.set_on_default_branch(SHA2, False)
+    await extract_rules(worker.deps, worker.repository_id, SHA2)  # awaiting_merge
+
+    await worker.set_on_default_branch(SHA2, True)  # the push that merges it
+    worker.llm.queue(RuleExtraction(rules=[rule()]))
+    released = await extract_rules(worker.deps, worker.repository_id, SHA2)
+
+    assert (released.status, released.created) == ("analyzed", 1)
+    commit = await worker.commit(SHA2)
+    assert commit is not None and commit.analysis_status == "analyzed"
+
+
+async def test_an_unknown_branch_does_not_defer_extraction(worker: WorkerContext) -> None:
+    """Rows from before the flag (NULL), or made by tools, keep working as before."""
+    await stage_friday_commit(worker)
+    await worker.set_on_default_branch(SHA2, None)
+    worker.llm.queue(RuleExtraction(rules=[rule()]))
+
+    assert (await extract_rules(worker.deps, worker.repository_id, SHA2)).status == "analyzed"

@@ -45,14 +45,18 @@ async def capture_session(
         },
     ).returning(AgentSession.id, literal_column("(xmax = 0)").label("created"))
     row = (await session.execute(statement)).one()
-    commit_known = await session.scalar(
-        select(Commit.id).where(
-            Commit.repository_id == repository.id, Commit.sha == payload.commit_sha
+    commit = (
+        await session.execute(
+            select(Commit.id, Commit.on_default_branch).where(
+                Commit.repository_id == repository.id, Commit.sha == payload.commit_sha
+            )
         )
-    )
+    ).first()
     await session.commit()
-    if commit_known is not None:
-        # The push webhook already arrived: extraction cannot wait for it, so queue it now.
+    if commit is not None and commit.on_default_branch is not False:
+        # The push webhook already arrived and the commit is on the default branch (or not known
+        # to be elsewhere): extraction cannot wait for it, so queue it now. Commits on a feature
+        # branch wait for the merge, see `rule_extraction`.
         await enqueue(
             request.app.state.queue, "rule_extraction", repository.id, sha=payload.commit_sha
         )

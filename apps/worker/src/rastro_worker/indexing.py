@@ -302,13 +302,29 @@ async def index_repository(deps: WorkerDeps, repository_id: uuid.UUID) -> IndexR
         return await persist_analyses(session, repository_id, head, analyses, removed_paths=gone)
 
 
+async def _mark_awaiting_merge(deps: WorkerDeps, repository_id: uuid.UUID, sha: str) -> None:
+    """A commit with a session on a feature branch is analysed only after it reaches the default
+    branch; say so on the commit instead of leaving it looking forgotten."""
+    async with deps.session_factory() as session, session.begin():
+        await session.execute(
+            update(Commit)
+            .where(
+                Commit.repository_id == repository_id,
+                Commit.sha == sha,
+                Commit.analysis_status.is_(None),
+            )
+            .values(analysis_status="awaiting_merge")
+        )
+
+
 async def analyze_commit(
     deps: WorkerDeps, repository_id: uuid.UUID, sha: str, on_default_branch: bool
 ) -> dict[str, int]:
     """Join the commit with its captured sessions and refresh symbols of the files it touched.
 
-    Symbols describe the default branch, so commits on other branches only report the join.
-    Rule extraction (phase 5) will run from here.
+    Symbols describe the default branch, so commits on other branches only report the session
+    join and wait (`awaiting_merge`): rules describe the default branch too, and a PR must be
+    compared with the rules as they are before it, not with the ones its own sessions would write.
     """
     async with deps.session_factory() as session:
         repository = await session.get(Repository, repository_id)
@@ -328,6 +344,8 @@ async def analyze_commit(
             select(Commit.id).where(Commit.repository_id == repository_id, Commit.sha == sha)
         )
     summary = {"sessions": sessions_found, "known_commit": int(known_commit is not None)}
+    if not on_default_branch and sessions_found:
+        await _mark_awaiting_merge(deps, repository_id, sha)
     if not on_default_branch or repository.installation_id == 0:
         return summary
 

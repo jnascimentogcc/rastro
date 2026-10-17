@@ -56,7 +56,7 @@ _NOISE_FILES = re.compile(r"(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|\.min
 
 @dataclass
 class ExtractionSummary:
-    # analyzed | analysis_failed | skipped_no_session | skipped_no_llm | skipped_budget | skipped_quota
+    # analyzed | analysis_failed | skipped_no_session | skipped_no_llm | skipped_budget | skipped_quota | awaiting_merge
     status: str
     created: int = 0
     updated: int = 0
@@ -164,6 +164,12 @@ async def extract_rules(
         # MVP decision (spec section 14): commits without a captured session are not analysed.
         await _set_status(deps, repository_id, sha, "skipped_no_session")
         return ExtractionSummary("skipped_no_session")
+    if not force and commit is not None and commit.on_default_branch is False:
+        # Rules describe the default branch. Extracting from a feature-branch commit would rewrite
+        # them before the pull request is analysed (hiding its own warning) and would leave them
+        # wrong if the PR is never merged. The push that merges the commit queues this again.
+        await _set_status(deps, repository_id, sha, "awaiting_merge")
+        return ExtractionSummary("awaiting_merge")
     if (
         not force
         and commit is not None
