@@ -32,6 +32,7 @@ from rastro_llm import (
     ExtractionContext,
     LLMError,
     LLMProvider,
+    LLMTransientError,
     PromptExcerpt,
     PromptFileDiff,
     PromptRule,
@@ -54,7 +55,7 @@ _NOISE_FILES = re.compile(r"(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|\.min
 
 @dataclass
 class ExtractionSummary:
-    status: str  # analyzed | analysis_failed | skipped_no_session | skipped_no_llm
+    status: str  # analyzed | analysis_failed | skipped_no_session | skipped_no_llm | skipped_budget
     created: int = 0
     updated: int = 0
     discarded: int = 0
@@ -169,6 +170,11 @@ async def extract_rules(
         and all(s.captured_at <= commit.analyzed_at for s in sessions)
     ):
         return ExtractionSummary("analyzed")
+
+    if await deps.over_budget(repository_id):
+        # Visible on the commit; re-run `rule_extraction` with force=True once budget exists.
+        await _set_status(deps, repository_id, sha, "skipped_budget")
+        return ExtractionSummary("skipped_budget")
 
     changes = await deps.github.get_commit_files(
         repository.installation_id, repository.full_name, sha
@@ -320,6 +326,8 @@ async def _ask_model(
     for attempt in range(1, ATTEMPTS + 1):
         try:
             return await llm.extract(prompt, RuleExtraction, metadata=metadata)
+        except LLMTransientError:
+            raise  # the job retries later with backoff; the commit is not marked as failed
         except (LLMError, ValidationError) as error:
             logger.warning("rule extraction attempt %d/%d failed: %s", attempt, ATTEMPTS, error)
     return None

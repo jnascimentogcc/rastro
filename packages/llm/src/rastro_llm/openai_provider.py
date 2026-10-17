@@ -4,8 +4,17 @@ import openai
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
-from rastro_llm.provider import LLMError, Usage, UsageSink
+from rastro_llm.provider import LLMError, LLMTransientError, Usage, UsageSink
 from rastro_llm.settings import LLMSettings
+
+
+def _wrap(error: Exception) -> LLMError:
+    """Rate limits, timeouts, connection problems and provider 5xx are transient."""
+    transient = isinstance(
+        error, openai.RateLimitError | openai.APIConnectionError | openai.InternalServerError
+    )  # APITimeoutError is an APIConnectionError
+    message = f"{type(error).__name__}: {error}"
+    return LLMTransientError(message) if transient else LLMError(message)
 
 
 class OpenAIProvider:
@@ -43,7 +52,7 @@ class OpenAIProvider:
                 response_format=schema,
             )
         except (openai.OpenAIError, ValidationError) as error:
-            raise LLMError(f"{type(error).__name__}: {error}") from error
+            raise _wrap(error) from error
 
         usage = completion.usage
         await self._record(
@@ -77,7 +86,7 @@ class OpenAIProvider:
                 model=model, input=texts, dimensions=self._settings.embedding_dimensions
             )
         except openai.OpenAIError as error:
-            raise LLMError(f"{type(error).__name__}: {error}") from error
+            raise _wrap(error) from error
         tokens = response.usage.prompt_tokens if response.usage else 0
         price = self._settings.embedding_price_per_mtok
         await self._record(

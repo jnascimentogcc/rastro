@@ -19,6 +19,11 @@ class LLMSettings(BaseSettings):
     llm_price_output_per_mtok: float | None = None
     embedding_price_per_mtok: float | None = None
 
+    # Tokens (input + output, embeddings included) one repository may use per calendar month
+    # (UTC). Once reached, extraction and impact analysis are skipped until the next month.
+    # Unset or 0 = unlimited.
+    llm_monthly_token_budget: int | None = None
+
     @property
     def configured(self) -> bool:
         return bool(self.openai_api_key and self.llm_model and self.embedding_model)

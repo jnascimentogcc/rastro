@@ -2,10 +2,10 @@ from typing import Any
 
 import pytest
 from api_support import ApiContext
-from sqlalchemy import select
+from sqlalchemy import select, text, update
 
 from rastro_db import create_session_factory
-from rastro_db.models import AgentSession
+from rastro_db.models import AgentSession, Repository
 
 pytestmark = pytest.mark.db
 
@@ -117,3 +117,32 @@ async def test_upload_queues_extraction_only_when_the_commit_is_already_known(
     [job] = api.jobs("rule_extraction")
     assert job["args"] == {"repository_id": str(api.repository_id), "sha": "a" * 40}
     assert job["lock"] == str(api.repository_id)
+
+
+async def test_capture_is_refused_while_the_app_is_not_installed(api: ApiContext) -> None:
+    async with create_session_factory(api.engine)() as session, session.begin():
+        await session.execute(
+            update(Repository)
+            .where(Repository.id == api.repository_id)
+            .values(status="uninstalled")
+        )
+
+    response = await api.client.post("/v1/sessions", json=PAYLOAD, headers=auth(api.token))
+
+    assert response.status_code == 403 and "uninstalled" in response.json()["detail"]
+
+
+async def test_excerpts_are_encrypted_in_the_database(api: ApiContext) -> None:
+    await api.client.post("/v1/sessions", json=PAYLOAD, headers=auth(api.token))
+
+    async with create_session_factory(api.engine)() as session:
+        raw = await session.scalar(
+            text("SELECT excerpts::text FROM agent_sessions WHERE repository_id = :r"),
+            {"r": api.repository_id},
+        )
+        stored = await session.scalar(
+            select(AgentSession).where(AgentSession.repository_id == api.repository_id)
+        )
+
+    assert raw is not None and "Implants" not in raw and '"ct"' in raw
+    assert stored is not None and stored.excerpts[0]["text"].startswith("Implants")

@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
+import openai
 import pytest
 from pydantic import SecretStr
 
@@ -9,6 +11,7 @@ from rastro_llm import (
     FakeProvider,
     LLMError,
     LLMSettings,
+    LLMTransientError,
     OpenAIProvider,
     RuleExtraction,
     Usage,
@@ -37,6 +40,14 @@ def settings(**overrides: Any) -> LLMSettings:
         "embedding_price_per_mtok": 0.1,
     }
     return LLMSettings(**(values | overrides))
+
+
+def _request() -> Any:  # the OpenAI SDK types its arguments with its own httpx build
+    return httpx.Request("POST", "https://x")
+
+
+def _response(status: int) -> Any:
+    return httpx.Response(status, request=_request())
 
 
 class FakeOpenAI:
@@ -171,3 +182,34 @@ def test_hashing_embedding_is_deterministic_and_reflects_shared_words() -> None:
 
     assert a == b
     assert cosine(a, close) > cosine(a, far)
+
+
+@pytest.mark.parametrize(
+    ("error", "transient"),
+    [
+        (openai.RateLimitError("slow down", response=_response(429), body=None), True),
+        (openai.InternalServerError("oops", response=_response(503), body=None), True),
+        (openai.APIConnectionError(request=_request()), True),
+        (openai.APITimeoutError(request=_request()), True),
+        (openai.AuthenticationError("bad key", response=_response(401), body=None), False),
+        (openai.BadRequestError("bad", response=_response(400), body=None), False),
+    ],
+)
+async def test_only_retryable_provider_errors_are_marked_transient(
+    error: Exception, transient: bool
+) -> None:
+    class Failing(FakeOpenAI):
+        def __init__(self) -> None:
+            super().__init__()
+
+            async def parse(**kwargs: Any) -> Any:
+                raise error
+
+            self.chat = SimpleNamespace(completions=SimpleNamespace(parse=parse))
+
+    provider = OpenAIProvider(settings(), client=Failing())  # type: ignore[arg-type]
+
+    with pytest.raises(LLMError) as raised:
+        await provider.extract("p", RuleExtraction)
+
+    assert isinstance(raised.value, LLMTransientError) is transient

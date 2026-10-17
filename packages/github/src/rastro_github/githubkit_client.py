@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import logging
 from typing import Any
 
 import httpx
@@ -14,6 +16,8 @@ from rastro_github.models import (
 )
 from rastro_github.settings import GitHubSettings
 
+logger = logging.getLogger(__name__)
+
 _STATUS_MAP: dict[str, ChangeStatus] = {
     "added": "added",
     "modified": "modified",
@@ -25,6 +29,7 @@ _STATUS_MAP: dict[str, ChangeStatus] = {
 _COMMIT_FILES_PER_PAGE = 100
 _COMMIT_FILES_MAX_PAGES = 30  # GitHub caps a commit at 3000 files
 _PR_FILES_MAX_PAGES = 30  # and a pull request at 3000 files
+_TREE_CONCURRENCY = 8
 
 
 class GithubKitClient:
@@ -68,17 +73,43 @@ class GithubKitClient:
         return data.commit.sha
 
     async def list_files(self, installation_id: int, full_name: str, ref: str) -> list[FileEntry]:
+        """Every file at `ref`. One recursive call covers most repositories; GitHub cuts the
+        answer at 100,000 entries / 7 MB and sets `truncated`, in which case the tree is walked
+        one directory per call so that nothing is silently missing."""
         owner, name = self._split(full_name)
-        tree = (
-            await self._for(installation_id).rest.git.async_get_tree(
-                owner, name, ref, recursive="1"
-            )
-        ).parsed_data
-        return [
-            FileEntry(path=item.path, blob_sha=item.sha, size=item.size or 0)
-            for item in tree.tree
-            if item.type == "blob" and item.path is not None and item.sha is not None
-        ]
+        github = self._for(installation_id)
+        tree = (await github.rest.git.async_get_tree(owner, name, ref, recursive="1")).parsed_data
+        if not tree.truncated:
+            return _blobs(tree.tree, prefix="")
+        logger.warning(
+            "tree of %s@%s is truncated by GitHub; listing it directory by directory",
+            full_name,
+            ref,
+        )
+        return await self._walk_tree(github, owner, name, ref)
+
+    async def _walk_tree(
+        self, github: GitHub[Any], owner: str, name: str, root: str
+    ) -> list[FileEntry]:
+        gate = asyncio.Semaphore(_TREE_CONCURRENCY)
+
+        async def one(sha: str, prefix: str) -> list[FileEntry]:
+            async with gate:
+                tree = (await github.rest.git.async_get_tree(owner, name, sha)).parsed_data
+            if tree.truncated:  # a single directory with 100k+ entries: keep what we got
+                logger.warning("directory %r is still truncated; some files are missing", prefix)
+            subtrees = [
+                one(item.sha, f"{prefix}{item.path}/")
+                for item in tree.tree
+                if item.type == "tree" and item.path is not None and item.sha is not None
+            ]
+            nested = await asyncio.gather(*subtrees)
+            return [
+                *_blobs(tree.tree, prefix=prefix),
+                *(entry for part in nested for entry in part),
+            ]
+
+        return await one(root, "")
 
     async def get_blob(self, installation_id: int, full_name: str, blob_sha: str) -> bytes:
         owner, name = self._split(full_name)
@@ -169,3 +200,11 @@ class GithubKitClient:
             if error.response.status_code == 404:
                 raise CommentNotFoundError(str(comment_id)) from error
             raise
+
+
+def _blobs(items: list[Any], *, prefix: str) -> list[FileEntry]:
+    return [
+        FileEntry(path=f"{prefix}{item.path}", blob_sha=item.sha, size=item.size or 0)
+        for item in items
+        if item.type == "blob" and item.path is not None and item.sha is not None
+    ]

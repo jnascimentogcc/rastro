@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from rastro_db.base import Base
 from rastro_db.config import EMBEDDING_DIMENSIONS
+from rastro_db.crypto import EncryptedExcerpts
 
 
 def _uuid_pk() -> Mapped[uuid.UUID]:
@@ -45,7 +46,21 @@ class Repository(Base):
     default_branch: Mapped[str] = mapped_column(Text, nullable=False)
     # SHA-256 of the repository API token used by the CLI (the token itself is never stored).
     api_token_hash: Mapped[str | None] = mapped_column(Text)
+    # active | suspended | uninstalled. Anything but active is not analysed; the data is kept
+    # (retention choice in the README) and a reinstall or unsuspend reactivates it.
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _now()
+
+
+class WebhookDelivery(Base):
+    """GitHub delivery ids already processed, so a replayed webhook is ignored."""
+
+    __tablename__ = "webhook_deliveries"
+
+    delivery_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    received_at: Mapped[datetime] = _now()
 
 
 class Commit(Base):
@@ -59,7 +74,7 @@ class Commit(Base):
     message: Mapped[str | None] = mapped_column(Text)
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # analyzed | analysis_failed | skipped_no_session | NULL (not analyzed yet)
+    # analyzed | analysis_failed | skipped_no_session | skipped_budget | NULL (not analyzed yet)
     analysis_status: Mapped[str | None] = mapped_column(Text)
 
 
@@ -78,7 +93,8 @@ class AgentSession(Base):
     session_ref: Mapped[str | None] = mapped_column(Text)
     agent_version: Mapped[str | None] = mapped_column(Text)
     git_branch: Mapped[str | None] = mapped_column(Text)
-    excerpts: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    # encrypted at rest (rastro_db.crypto); readers still see a list of dicts
+    excerpts: Mapped[list[dict[str, Any]]] = mapped_column(EncryptedExcerpts, nullable=False)
     captured_at: Mapped[datetime] = _now()
 
 

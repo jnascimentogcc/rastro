@@ -4,9 +4,10 @@ from typing import Any
 
 import pytest
 from api_support import ApiContext
+from sqlalchemy import delete
 
 from rastro_db import create_session_factory, generate_token, hash_token
-from rastro_db.models import Commit, Repository, Rule, RuleAnchor, RuleOrigin
+from rastro_db.models import Commit, LlmCall, Repository, Rule, RuleAnchor, RuleOrigin
 from rastro_db.models import Symbol as SymbolRow
 from rastro_llm import FakeProvider, LLMError, hashing_embedding
 
@@ -319,3 +320,28 @@ async def test_rules_require_the_repository_token(api: ApiContext) -> None:
     assert (
         await api.client.get("/v1/repos/not-a-uuid/rules", headers=auth(api))
     ).status_code == 422
+
+
+async def test_search_uses_text_matching_once_the_monthly_budget_is_spent(
+    api: ApiContext,
+) -> None:
+    await seed(api)
+    state = llm_of(api)
+    state.llm_monthly_token_budget = 100
+    async with create_session_factory(api.engine)() as session, session.begin():
+        session.add(
+            LlmCall(
+                repository_id=api.repository_id,
+                purpose="embedding",
+                model="m",
+                input_tokens=100,
+                output_tokens=0,
+            )
+        )
+
+    response = await api.client.get(url(api), params={"q": "DISCOUNT"}, headers=auth(api))
+
+    assert response.json()["search"] == "text"  # the embedding call was not made
+    assert state.llm.embedded == []
+    async with create_session_factory(api.engine)() as session, session.begin():
+        await session.execute(delete(LlmCall).where(LlmCall.repository_id == api.repository_id))

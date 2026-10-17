@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import literal_column, select
 from sqlalchemy.dialects.postgresql import insert
 
@@ -19,7 +19,14 @@ async def capture_session(
     response: Response,
 ) -> SessionCaptureOut:
     """Store a session capture. Idempotent per (commit, session): the CLI retries pending
-    captures, so a repeated upload replaces the previous one instead of failing."""
+    captures, so a repeated upload replaces the previous one instead of failing. A repository
+    whose GitHub App installation was removed or suspended answers 403: the CLI keeps the capture
+    pending and uploads it once the App is installed again."""
+    if repository.status != "active":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Repository is {repository.status}: reinstall or unsuspend the Rastro GitHub App",
+        )
     values = {
         "repository_id": repository.id,
         "commit_sha": payload.commit_sha,
