@@ -42,7 +42,12 @@ async def test_rule_and_symbol_roundtrip_with_embeddings() -> None:
                 )
             )
             await session.flush()
-            rule = (await session.execute(text("SELECT status, rationale FROM rules"))).one()
+            rule = (
+                await session.execute(
+                    text("SELECT status, rationale FROM rules WHERE repository_id = :id"),
+                    {"id": repo_id},
+                )
+            ).one()  # only this test's rule: the database may hold other repositories
             assert rule.status == "active"
             assert rule.rationale is None
             await session.rollback()

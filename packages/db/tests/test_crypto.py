@@ -132,9 +132,13 @@ async def test_data_migration_encrypts_plaintext_rows_and_is_idempotent() -> Non
             )
         cipher = ExcerptCipher([generate_key()])
         async with engine.begin() as connection:
-            await connection.run_sync(lambda c: encrypt_existing_rows(c, cipher=cipher))
+            await connection.run_sync(
+                lambda c: encrypt_existing_rows(c, cipher=cipher, repository_id=repo_id)
+            )
         async with engine.begin() as connection:  # second run only rotates
-            await connection.run_sync(lambda c: encrypt_existing_rows(c, cipher=cipher))
+            await connection.run_sync(
+                lambda c: encrypt_existing_rows(c, cipher=cipher, repository_id=repo_id)
+            )
         async with factory() as session:
             raw = await session.scalar(
                 text("SELECT excerpts FROM agent_sessions WHERE repository_id = :r"), {"r": repo_id}

@@ -491,3 +491,22 @@ async def test_a_transient_model_failure_propagates_so_the_job_can_be_retried(
             )
         )
     assert status != "analysis_failed"  # not given up: the retry will analyse it
+
+
+async def test_a_changed_module_constant_makes_the_functions_using_it_candidates(
+    worker: WorkerContext,
+) -> None:
+    before = "const LIMIT = 24;\n\nexport function validate(hours: number): boolean {\n  return hours >= LIMIT;\n}\n"
+    after = before.replace("24", "12")
+    worker.stage_commit(SHA2, {AGENDA: after}, {AGENDA: before})
+    await worker.add_commit_row(SHA2, "Shorten the notice period")
+    await worker.add_session(
+        SHA2, [user_excerpt("Cancellations are allowed 12 hours before, not 24.")]
+    )
+    worker.llm.queue(RuleExtraction(rules=[]))
+
+    await extract_rules(worker.deps, worker.repository_id, SHA2)
+
+    prompt = worker.llm.calls[0].prompt
+    assert '<symbol key="src/agenda.ts::validate"' in prompt
+    assert "+const LIMIT = 12;" in prompt

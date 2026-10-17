@@ -3,8 +3,14 @@ from pathlib import PurePosixPath
 
 from tree_sitter import Node
 
-from rastro_code_analysis.hashing import normalized_hash
-from rastro_code_analysis.models import CallRef, FileAnalysis, Symbol, SymbolKind
+from rastro_code_analysis.hashing import collect_locals, normalized_hash
+from rastro_code_analysis.models import (
+    CallRef,
+    Declaration,
+    FileAnalysis,
+    Symbol,
+    SymbolKind,
+)
 from rastro_code_analysis.parser import parse
 
 _FUNCTION_DECLARATIONS = frozenset({"function_declaration", "generator_function_declaration"})
@@ -14,6 +20,8 @@ _FUNCTION_VALUES = frozenset(
 _CLASS_NODES = frozenset({"class_declaration", "abstract_class_declaration", "class"})
 
 SymbolSink = Callable[[Symbol], None]
+DeclarationSink = Callable[[Declaration], None]
+_REFERENCE_NODES = frozenset({"identifier", "shorthand_property_identifier"})
 
 
 def _text(node: Node | None) -> str:
@@ -31,26 +39,34 @@ def analyze_source(source: str | bytes, file_path: str) -> FileAnalysis:
     root = parse(data, file_path).root_node
     stem = PurePosixPath(file_path.replace("\\", "/")).stem
     collected: dict[str, Symbol] = {}
+    declarations: list[Declaration] = []
 
     def add(symbol: Symbol) -> None:
         collected.setdefault(symbol.qualified_name, symbol)  # overloads/accessors: keep first
 
     for node in root.children:
-        _visit_top_level(node, stem, add)
-    return FileAnalysis(file_path=file_path, symbols=tuple(collected.values()))
+        _visit_top_level(node, stem, add, declarations.append)
+    return FileAnalysis(
+        file_path=file_path, symbols=tuple(collected.values()), declarations=tuple(declarations)
+    )
 
 
-def _visit_top_level(node: Node, file_stem: str, add: SymbolSink) -> None:
+def _visit_top_level(node: Node, file_stem: str, add: SymbolSink, declare: DeclarationSink) -> None:
     if node.type == "export_statement":
         inner = node.child_by_field_name("declaration") or node.child_by_field_name("value")
         if inner is not None:
-            _visit_declaration(inner, file_stem, add, exported_default=True)
+            _visit_declaration(inner, file_stem, add, declare, exported_default=True)
         return
-    _visit_declaration(node, file_stem, add)
+    _visit_declaration(node, file_stem, add, declare)
 
 
 def _visit_declaration(
-    node: Node, file_stem: str, add: SymbolSink, *, exported_default: bool = False
+    node: Node,
+    file_stem: str,
+    add: SymbolSink,
+    declare: DeclarationSink,
+    *,
+    exported_default: bool = False,
 ) -> None:
     if node.type in _FUNCTION_DECLARATIONS:
         name_node = node.child_by_field_name("name")
@@ -58,11 +74,53 @@ def _visit_declaration(
     elif node.type in ("lexical_declaration", "variable_declaration"):
         for declarator in node.named_children:
             _visit_declarator(declarator, add)
+            _declare_constants(node, declarator, declare)
+    elif node.type == "enum_declaration":
+        name = _text(node.child_by_field_name("name"))
+        if name:
+            declare(Declaration(name, node.start_point.row + 1, node.end_point.row + 1))
     elif node.type in _CLASS_NODES:
         name_node = node.child_by_field_name("name")
         _visit_class(node, _text(name_node) or file_stem, name_node, add)
     elif exported_default and node.type in _FUNCTION_VALUES:
         add(_function_symbol(node, file_stem, "function", node.child_by_field_name("name")))
+
+
+def _declare_constants(statement: Node, declarator: Node, declare: DeclarationSink) -> None:
+    """Record the names a non-function declarator introduces (`const A = 1`, `const {b, c} = x`)."""
+    if declarator.type != "variable_declarator":
+        return
+    value = declarator.child_by_field_name("value")
+    if value is not None and value.type in _FUNCTION_VALUES:
+        return  # already a symbol
+    name_node = declarator.child_by_field_name("name")
+    if name_node is None:
+        return
+    names: list[str] = []
+    stack = [name_node]
+    while stack:
+        current = stack.pop()
+        if current.type in ("identifier", "shorthand_property_identifier_pattern"):
+            names.append(_text(current))
+        else:
+            stack.extend(current.children)
+    for name in names:
+        declare(Declaration(name, statement.start_point.row + 1, statement.end_point.row + 1))
+
+
+def _collect_references(node: Node) -> tuple[str, ...]:
+    """Identifiers used inside `node` that it does not declare itself."""
+    local = collect_locals(node)
+    found: set[str] = set()
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type in _REFERENCE_NODES:
+            name = _text(current)
+            if name not in local:
+                found.add(name)
+        stack.extend(current.children)
+    return tuple(sorted(found))
 
 
 def _visit_declarator(declarator: Node, add: SymbolSink) -> None:
@@ -85,6 +143,7 @@ def _visit_class(node: Node, class_name: str, name_node: Node | None, add: Symbo
             start_line=node.start_point.row + 1,
             end_line=node.end_point.row + 1,
             calls=_collect_calls(node),
+            references=_collect_references(node),
         )
     )
     body = node.child_by_field_name("body")
@@ -138,6 +197,7 @@ def _function_symbol(
         start_line=span.start_point.row + 1,
         end_line=span.end_point.row + 1,
         calls=_collect_calls(node),
+        references=_collect_references(node),
     )
 
 

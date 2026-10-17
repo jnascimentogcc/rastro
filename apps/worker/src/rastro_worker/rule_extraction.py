@@ -255,7 +255,7 @@ async def _analyze_changes(
         analysis = analyze_source(text, change.path)
         analyses.append(analysis)
         sources[change.path] = text
-        hit = touched_symbols(list(analysis.symbols), change.patch)
+        hit = touched_symbols(list(analysis.symbols), change.patch, analysis.declarations)
         if hit:
             touched[change.path] = hit
     return analyses, touched, sources

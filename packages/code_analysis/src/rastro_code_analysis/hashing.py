@@ -50,6 +50,11 @@ def _collect_locals(root: Node) -> set[str]:
     return names
 
 
+def collect_locals(root: Node) -> set[str]:
+    """Names declared inside `root` (parameters and variables)."""
+    return _collect_locals(root)
+
+
 def normalized_hash(
     symbol_node: Node, *, skip: Node | None = None, self_name: str | None = None
 ) -> str:
