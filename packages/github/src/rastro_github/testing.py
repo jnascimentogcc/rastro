@@ -17,6 +17,7 @@ class _Repo:
     trees: dict[str, dict[str, bytes]] = field(default_factory=dict)  # ref -> path -> content
     commits: dict[str, list[ChangedFile]] = field(default_factory=dict)
     pulls: dict[int, list[ChangedFile]] = field(default_factory=dict)
+    pull_commits: dict[int, list[str]] = field(default_factory=dict)
 
 
 class FakeGitHub:
@@ -55,6 +56,10 @@ class FakeGitHub:
         for text in (blobs or {}).values():
             self._blobs[blob_sha(text.encode())] = text.encode()
 
+    def set_pull_request_commits(self, full_name: str, number: int, shas: list[str]) -> None:
+        """The commits of a pull request, oldest first."""
+        self._repos[full_name].pull_commits[number] = shas
+
     def comments_on(self, number: int) -> list[str]:
         return [body for cid, body in self.comments.items() if self.comment_targets[cid] == number]
 
@@ -90,6 +95,12 @@ class FakeGitHub:
     ) -> list[ChangedFile]:
         self.calls.append(f"get_pull_request_files {full_name}#{number}")
         return self._repos[full_name].pulls[number]
+
+    async def get_pull_request_commits(
+        self, installation_id: int, full_name: str, number: int
+    ) -> list[str]:
+        self.calls.append(f"get_pull_request_commits {full_name}#{number}")
+        return list(self._repos[full_name].pull_commits[number])
 
     async def create_comment(
         self, installation_id: int, full_name: str, number: int, body: str

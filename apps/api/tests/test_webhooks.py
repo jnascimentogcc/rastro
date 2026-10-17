@@ -370,9 +370,49 @@ async def test_a_waiting_analysis_absorbs_further_pushes_to_the_same_pull_reques
     assert len(api.jobs("analyze_pr")) == 1  # it reads the latest state when it runs
 
 
-@pytest.mark.parametrize("action", ["closed", "labeled", "edited", "assigned"])
+@pytest.mark.parametrize("action", ["labeled", "edited", "assigned"])
 async def test_other_pull_request_actions_are_ignored(api: ApiContext, action: str) -> None:
     response = await deliver(api, "pull_request", pull_request_payload(action))
+
+    assert response.status_code == 202 and response.json()["handled"] is False
+    assert api.queue.jobs == {}
+
+
+async def test_a_merged_pull_request_queues_the_release_of_its_commits(api: ApiContext) -> None:
+    payload = pull_request_payload("closed")
+    payload["pull_request"].update(merged=True, merge_commit_sha=SHA_B)
+
+    response = await deliver(api, "pull_request", payload, delivery_id="merged-1" + RUN)
+
+    assert response.status_code == 202 and response.json()["handled"] is True
+    [job] = api.jobs("pull_request_merged")
+    assert job["args"]["number"] == 7 and job["args"]["merge_commit_sha"] == SHA_B  # type: ignore[index]
+    assert job["lock"] == job["args"]["repository_id"]  # type: ignore[index]
+    assert api.jobs("analyze_pr") == []
+
+
+async def test_a_redelivered_merge_queues_nothing_more(api: ApiContext) -> None:
+    payload = pull_request_payload("closed")
+    payload["pull_request"].update(merged=True, merge_commit_sha=SHA_B)
+
+    await deliver(api, "pull_request", payload, delivery_id="merged-2" + RUN)
+    replay = await deliver(api, "pull_request", payload, delivery_id="merged-2" + RUN)
+    again = await deliver(api, "pull_request", payload, delivery_id="merged-3" + RUN)
+
+    assert replay.json()["duplicate"] is True
+    assert again.json()["handled"] is True  # a new delivery while the job still waits: absorbed
+    assert len(api.jobs("pull_request_merged")) == 1
+
+
+@pytest.mark.parametrize("merged", [False, None])
+async def test_a_pull_request_closed_without_merging_does_nothing(
+    api: ApiContext, merged: bool | None
+) -> None:
+    payload = pull_request_payload("closed")
+    if merged is not None:
+        payload["pull_request"]["merged"] = merged
+
+    response = await deliver(api, "pull_request", payload)
 
     assert response.status_code == 202 and response.json()["handled"] is False
     assert api.queue.jobs == {}

@@ -282,3 +282,45 @@ async def test_updating_a_deleted_comment_raises_a_specific_error(private_key_pe
 
     with pytest.raises(CommentNotFoundError):
         await client.update_comment(113, "acme/clinic", 42, "x")
+
+
+async def test_pull_request_commits_are_paginated_oldest_first(private_key_pem: str) -> None:
+    pages: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        assert request.url.path == "/repos/acme/clinic/pulls/5/commits"
+        pages.append(request.url.params["page"])
+        count = 100 if request.url.params["page"] == "1" else 2
+        offset = 0 if request.url.params["page"] == "1" else 100
+        return httpx.Response(200, json=[commit_json(f"{offset + i:040x}") for i in range(count)])
+
+    client = make_client(private_key_pem, httpx.MockTransport(handler))
+
+    shas = await client.get_pull_request_commits(111, "acme/clinic", 5)
+
+    assert pages == ["1", "2"] and len(shas) == 102
+    assert shas[0] == f"{0:040x}" and shas[-1] == f"{101:040x}"
+
+
+def commit_json(sha: str) -> dict[str, object]:
+    person = {"name": "Dev", "email": "dev@example.com", "date": "2026-10-01T10:00:00Z"}
+    return {
+        "sha": sha,
+        "node_id": "n",
+        "url": "https://api.github.com/x",
+        "html_url": "https://github.com/x",
+        "comments_url": "https://api.github.com/x",
+        "commit": {
+            "url": "https://api.github.com/x",
+            "author": person,
+            "committer": person,
+            "message": "m",
+            "comment_count": 0,
+            "tree": {"sha": "t", "url": "https://api.github.com/x"},
+        },
+        "author": None,
+        "committer": None,
+        "parents": [],
+    }
