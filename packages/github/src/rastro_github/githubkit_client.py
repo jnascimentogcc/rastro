@@ -29,6 +29,8 @@ _STATUS_MAP: dict[str, ChangeStatus] = {
 _COMMIT_FILES_PER_PAGE = 100
 _COMMIT_FILES_MAX_PAGES = 30  # GitHub caps a commit at 3000 files
 _PR_FILES_MAX_PAGES = 30  # and a pull request at 3000 files
+_PR_COMMITS_PER_PAGE = 100
+_PR_COMMITS_MAX_PAGES = 10  # GitHub lists at most 250 commits of a pull request
 _TREE_CONCURRENCY = 8
 
 
@@ -176,6 +178,25 @@ class GithubKitClient:
             if len(files) < _COMMIT_FILES_PER_PAGE:
                 break
         return changed
+
+    async def get_pull_request_commits(
+        self, installation_id: int, full_name: str, number: int
+    ) -> list[str]:
+        owner, name = self._split(full_name)
+        github = self._for(installation_id)
+        shas: list[str] = []
+        for page in range(1, _PR_COMMITS_MAX_PAGES + 1):
+            commits: list[Any] = list(
+                (
+                    await github.rest.pulls.async_list_commits(
+                        owner, name, number, per_page=_PR_COMMITS_PER_PAGE, page=page
+                    )
+                ).parsed_data
+            )
+            shas.extend(item.sha for item in commits)
+            if len(commits) < _PR_COMMITS_PER_PAGE:
+                break
+        return shas
 
     async def create_comment(
         self, installation_id: int, full_name: str, number: int, body: str

@@ -29,6 +29,12 @@ class GitHubClient(Protocol):
         """Files of a pull request against its base, with patches and head blob SHAs."""
         ...
 
+    async def get_pull_request_commits(
+        self, installation_id: int, full_name: str, number: int
+    ) -> list[str]:
+        """SHAs of the commits of a pull request, oldest first (the order GitHub lists them)."""
+        ...
+
     async def create_comment(
         self, installation_id: int, full_name: str, number: int, body: str
     ) -> int:

@@ -255,7 +255,9 @@ _PULL_REQUEST_ACTIONS = frozenset({"opened", "synchronize", "reopened", "ready_f
 async def _on_pull_request(
     payload: dict[str, Any], session: AsyncSession, queue: procrastinate.App
 ) -> bool:
-    if payload.get("action") not in _PULL_REQUEST_ACTIONS:
+    action = payload.get("action")
+    merged = action == "closed" and bool(payload.get("pull_request", {}).get("merged"))
+    if action not in _PULL_REQUEST_ACTIONS and not merged:
         return False
     repo = payload["repository"]
     pull_request = payload["pull_request"]
@@ -272,6 +274,17 @@ async def _on_pull_request(
     if not await _is_active(session, repository_id):
         return False
     number = int(payload["number"])
+    if merged:
+        # Squash and rebase merges create new commits; the sessions belong to the PR's own ones.
+        await enqueue(
+            queue,
+            "pull_request_merged",
+            repository_id,
+            queueing_lock=f"pr-merged:{repository_id}:{number}",
+            number=number,
+            merge_commit_sha=pull_request.get("merge_commit_sha"),
+        )
+        return True
     # A job already waiting for this PR will read its latest state, so do not stack another.
     await enqueue(
         queue,

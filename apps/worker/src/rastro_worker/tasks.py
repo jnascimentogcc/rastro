@@ -7,7 +7,7 @@ from githubkit.exception import GitHubException, RequestFailed
 from sqlalchemy import select
 
 from rastro_db.models import Repository
-from rastro_worker import impact, indexing, resync, rule_extraction
+from rastro_worker import impact, indexing, merged_pr, resync, rule_extraction
 from rastro_worker.app import app
 from rastro_worker.deps import get_deps
 from rastro_worker.retry import retry_transient
@@ -109,3 +109,27 @@ async def analyze_pr(repository_id: str, number: int, head_sha: str) -> None:
     if not await repository_is_active(repository_id):
         return
     await impact.analyze_pull_request(get_deps(), uuid.UUID(repository_id), number, head_sha)
+
+
+@app.task(name="pull_request_merged", retry=retry_transient)
+@log_github_errors
+async def pull_request_merged(
+    repository_id: str, number: int, merge_commit_sha: str | None = None
+) -> None:
+    """A pull request was merged (merge, squash or rebase). Release the sessions of its own
+    commits for rule extraction, oldest commit first; jobs of a repository run in the order they
+    were queued, so later commits see (and may update) the rules the earlier ones wrote.
+    The merge/squash commit itself is analysed first so symbols exist for the merged state."""
+    if not await repository_is_active(repository_id):
+        return
+    merged = await merged_pr.release_pull_request_commits(
+        get_deps(), uuid.UUID(repository_id), number
+    )
+    if merge_commit_sha:
+        await analyze_commit.configure(lock=repository_id).defer_async(
+            repository_id=repository_id, sha=merge_commit_sha, on_default_branch=True
+        )
+    for sha in merged.extract_shas:
+        await extract_rules.configure(lock=repository_id).defer_async(
+            repository_id=repository_id, sha=sha
+        )

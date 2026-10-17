@@ -181,7 +181,9 @@ Rules describe the default branch. Extraction runs only for commits that are on 
 a session pushed to a feature branch is marked `awaiting_merge`, and the push that merges it (a merge
 commit pushes the PR's commits again) releases it. This way a pull request is analysed against the
 rules as they were before it, and a PR that is never merged never changes them. Squash and rebase
-merges create new commit SHAs without a session, so their rules are not learned yet.
+merges create new commit SHAs without a session, so merging a pull request (any kind) also lists the
+PR's own commits through the GitHub API, marks them as default-branch commits and extracts rules from
+each one's own diff, oldest first (later commits see and may update the rules of earlier ones).
 
 For every commit with a captured session, the worker's `rule_extraction` job sends the diff, the
 user requests, the changed symbols and the rules already anchored to them to the model, validates
