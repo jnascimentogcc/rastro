@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
@@ -127,15 +128,26 @@ class EncryptedExcerpts(TypeDecorator[list[dict[str, Any]]]):
         return cipher.decrypt(value)
 
 
-def encrypt_existing_rows(connection: Connection, *, cipher: ExcerptCipher | None = None) -> int:
+def encrypt_existing_rows(
+    connection: Connection,
+    *,
+    cipher: ExcerptCipher | None = None,
+    repository_id: uuid.UUID | None = None,
+) -> int:
     """Encrypt plaintext rows and re-encrypt envelopes under the primary key. Idempotent.
+    `repository_id` limits the work to one repository (tests; the migration and the CLI do all).
     Raw SQL on purpose: it must see the stored value, not the decrypted one. Returns the number
     of rows written; 0 (and a warning) when no key is configured."""
     cipher = cipher or get_cipher()
     if cipher is None:
         logger.warning("%s is not set: existing session excerpts were not encrypted", KEYS_ENV)
         return 0
-    rows = connection.execute(text("SELECT id, excerpts FROM agent_sessions")).all()
+    query = "SELECT id, excerpts FROM agent_sessions"
+    parameters: dict[str, object] = {}
+    if repository_id is not None:
+        query += " WHERE repository_id = :repository_id"
+        parameters["repository_id"] = repository_id
+    rows = connection.execute(text(query), parameters).all()
     written = 0
     for row_id, stored in rows:
         updated = cipher.rotate(stored) if is_envelope(stored) else cipher.encrypt(stored)

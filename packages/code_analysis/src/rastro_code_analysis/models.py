@@ -20,6 +20,17 @@ class CallRef:
 
 
 @dataclass(frozen=True)
+class Declaration:
+    """A module-level `const`/`let`/`var` (or enum) that is not a function. It is not a symbol of
+    its own, but business thresholds often live here (`const MIN_NOTICE = 24 * HOUR`), so a change
+    to it is a change to every symbol that references it."""
+
+    name: str
+    start_line: int  # 1-based, inclusive
+    end_line: int
+
+
+@dataclass(frozen=True)
 class Symbol:
     qualified_name: str
     kind: SymbolKind
@@ -27,6 +38,8 @@ class Symbol:
     start_line: int  # 1-based, inclusive
     end_line: int
     calls: tuple[CallRef, ...] = field(default_factory=tuple)
+    # Free identifiers used in the body (not parameters or locals): module constants, imports...
+    references: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def simple_name(self) -> str:
@@ -37,3 +50,4 @@ class Symbol:
 class FileAnalysis:
     file_path: str
     symbols: tuple[Symbol, ...]
+    declarations: tuple[Declaration, ...] = field(default_factory=tuple)

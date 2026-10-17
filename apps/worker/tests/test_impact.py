@@ -347,3 +347,27 @@ async def test_the_counterexample_is_kept_with_the_stored_finding(worker: Worker
     analysis = await worker.pr_analysis(PR)
     assert analysis is not None
     assert analysis.findings[0]["counterexample"] == "A Saturday 09:00 implant is now accepted."
+
+
+POLICY = """const MIN_NOTICE_MS = 24 * 60 * 60 * 1000;
+
+export function validateBooking(notice: number): boolean {
+  return notice >= MIN_NOTICE_MS;
+}
+"""
+
+
+async def test_changing_a_module_constant_reaches_the_rules_of_the_functions_that_use_it(
+    worker: WorkerContext,
+) -> None:
+    """The first live test: the threshold lives in a constant outside every function."""
+    await seeded(worker, {AGENDA: POLICY})
+    worker.stage_pull_request(PR, {AGENDA: POLICY.replace("24", "12")}, {AGENDA: POLICY})
+    worker.llm.queue(verdict("breaks", 0.95, "The notice period drops from 24 to 12 hours."))
+
+    result = await run(worker)
+
+    assert (result.candidates, result.reported, result.commented) == (1, 1, True)
+    prompt = worker.llm.calls[0].prompt
+    assert "+const MIN_NOTICE_MS = 12 * 60 * 60 * 1000;" in prompt
+    assert "src/agenda.ts::validateBooking" in prompt  # the function the constant feeds
