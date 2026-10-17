@@ -17,6 +17,7 @@ from rastro_worker.evaluation import (
     Report,
     format_report,
     load_fixture,
+    load_pull_requests,
     run_evaluation,
 )
 
@@ -32,13 +33,19 @@ async def main_async(fixture_path: Path, oracle: bool, keep: bool, verbose: bool
     reports: list[Report] = []
     try:
         fixture = load_fixture(fixture_path)
+        pull_requests = load_pull_requests(fixture_path)
         for number in range(1, runs + 1):
             if runs > 1:
                 print(f"--- run {number}/{runs}", flush=True)
             if oracle:
                 fake = FakeProvider(usage_sink=usage_recorder(factory))
                 report = await run_evaluation(
-                    factory, fixture, llm=fake, oracle=fake, keep_data=keep
+                    factory,
+                    fixture,
+                    llm=fake,
+                    oracle=fake,
+                    keep_data=keep,
+                    pull_requests=pull_requests,
                 )
             else:
                 provider = OpenAIProvider(settings, usage_sink=usage_recorder(factory))
@@ -47,7 +54,12 @@ async def main_async(fixture_path: Path, oracle: bool, keep: bool, verbose: bool
                     print(f"  analysing {name} ...", flush=True)
 
                 report = await run_evaluation(
-                    factory, fixture, llm=provider, keep_data=keep, on_commit=progress
+                    factory,
+                    fixture,
+                    llm=provider,
+                    keep_data=keep,
+                    on_commit=progress,
+                    pull_requests=pull_requests,
                 )
             reports.append(report)
             if runs == 1 or verbose:
@@ -56,20 +68,23 @@ async def main_async(fixture_path: Path, oracle: bool, keep: bool, verbose: bool
         await engine.dispose()
 
     if runs > 1:
-        print("\nrun  success  recall  reasons  updates  false+  tokens in/out")
+        print("\nrun  success  recall  reasons  updates  false+  PR missed/irrelev.  tokens in/out")
         for number, report in enumerate(reports, start=1):
             print(
                 f"{number:>3}  {report.success_rate:>6.0%}  {report.recall:>6.0%}  "
                 f"{report.rationale_accuracy:>7.0%}  {report.update_accuracy:>7.0%}  "
-                f"{report.false_positive_commits:>5}  {report.input_tokens}/{report.output_tokens}"
+                f"{report.false_positive_commits:>5}  {report.pr_missed_warnings:>6}/{report.pr_irrelevant_comments:<10}  "
+                f"{report.input_tokens}/{report.output_tokens}"
             )
         mean = sum(r.success_rate for r in reports) / len(reports)
+        pr_clean = sum(r.pr_ok for r in reports)
         worst = min(r.success_rate for r in reports)
         print(
-            f"mean success {mean:.0%}, worst {worst:.0%} "
-            f"(target {SUCCESS_THRESHOLD:.0%}) -> {'PASS' if mean >= SUCCESS_THRESHOLD else 'FAIL'}"
+            f"mean success {mean:.0%}, worst {worst:.0%} (target {SUCCESS_THRESHOLD:.0%}); "
+            f"PR irrelevant-comment budget met in {pr_clean}/{len(reports)} runs "
+            f"-> {'PASS' if mean >= SUCCESS_THRESHOLD and pr_clean == len(reports) else 'FAIL'}"
         )
-        return 0 if mean >= SUCCESS_THRESHOLD else 1
+        return 0 if mean >= SUCCESS_THRESHOLD and pr_clean == len(reports) else 1
     return 0 if reports[0].passed else 1
 
 

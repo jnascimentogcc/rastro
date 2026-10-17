@@ -1,0 +1,8 @@
+{
+  "title": "Shorten the cancellation window to 12 hours",
+  "description": "Patients may now cancel up to 12 hours before the appointment instead of 24.",
+  "expect_warning": true,
+  "oracle": [
+    { "match": [["cancel"], ["24"]], "risk": "breaks" }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "title": "Add a date formatting helper",
+  "description": "A new, unrelated utility file.",
+  "expect_warning": false,
+  "oracle": []
+}

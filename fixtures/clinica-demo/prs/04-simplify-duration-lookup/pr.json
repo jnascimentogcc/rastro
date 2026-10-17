@@ -1,0 +1,6 @@
+{
+  "title": "Simplify the duration lookup",
+  "description": "Collapse the if/return pair in durationMinutes into one conditional expression. Same durations as before: orthodontics 45 minutes, everything else 30.",
+  "expect_warning": false,
+  "oracle": []
+}

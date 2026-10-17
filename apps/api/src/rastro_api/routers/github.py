@@ -167,10 +167,37 @@ async def _known_installation(session: AsyncSession, github_id: int) -> int:
     return found or 0
 
 
+_PULL_REQUEST_ACTIONS = frozenset({"opened", "synchronize", "reopened", "ready_for_review"})
+
+
 async def _on_pull_request(
     payload: dict[str, Any], session: AsyncSession, queue: procrastinate.App
 ) -> bool:
-    return False  # impact analysis arrives in phase 7
+    if payload.get("action") not in _PULL_REQUEST_ACTIONS:
+        return False
+    repo = payload["repository"]
+    pull_request = payload["pull_request"]
+    installation = payload.get("installation") or {}
+    repository_id = await _upsert_repository(
+        session,
+        github_id=int(repo["id"]),
+        full_name=repo["full_name"],
+        installation_id=int(installation.get("id", 0))
+        or await _known_installation(session, int(repo["id"])),
+        default_branch=repo.get("default_branch"),
+    )
+    await session.commit()
+    number = int(payload["number"])
+    # A job already waiting for this PR will read its latest state, so do not stack another.
+    await enqueue(
+        queue,
+        "analyze_pr",
+        repository_id,
+        queueing_lock=f"pr:{repository_id}:{number}",
+        number=number,
+        head_sha=pull_request["head"]["sha"],
+    )
+    return True
 
 
 def _parse_time(value: object) -> datetime | None:

@@ -164,7 +164,12 @@ class RuleAnchor(Base):
 
 
 class PrAnalysis(Base):
+    """Latest impact analysis of a pull request; one row per PR, updated on every push."""
+
     __tablename__ = "pr_analyses"
+    __table_args__ = (
+        UniqueConstraint("repository_id", "pr_number", name="uq_pr_analyses_repo_pr"),
+    )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), nullable=False)

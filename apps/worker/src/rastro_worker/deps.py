@@ -2,7 +2,7 @@
 tests can inject fakes with `set_deps`."""
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -10,6 +10,7 @@ from rastro_db import create_engine, create_session_factory
 from rastro_db.models import LlmCall
 from rastro_github import GitHubClient, GithubKitClient, GitHubSettings
 from rastro_llm import LLMProvider, LLMSettings, OpenAIProvider, Usage, UsageSink
+from rastro_worker.settings import ImpactSettings
 
 
 @dataclass
@@ -17,6 +18,7 @@ class WorkerDeps:
     session_factory: async_sessionmaker[AsyncSession]
     github: GitHubClient
     llm: LLMProvider | None = None  # None when no model is configured
+    impact: ImpactSettings = field(default_factory=ImpactSettings)
 
 
 def usage_recorder(session_factory: async_sessionmaker[AsyncSession]) -> UsageSink:
