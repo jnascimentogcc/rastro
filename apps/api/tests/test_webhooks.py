@@ -376,3 +376,27 @@ async def test_other_pull_request_actions_are_ignored(api: ApiContext, action: s
 
     assert response.status_code == 202 and response.json()["handled"] is False
     assert api.queue.jobs == {}
+
+
+async def test_the_push_records_whether_the_commits_are_on_the_default_branch(
+    api: ApiContext,
+) -> None:
+    await deliver(api, "push", push_payload(ref="refs/heads/feature/x"))
+    assert {c.on_default_branch for c in await stored_commits(api)} == {False}
+
+    await deliver(api, "push", push_payload(ref="refs/heads/main", commits=[]))  # only the head
+
+    flags = {c.sha: c.on_default_branch for c in await stored_commits(api)}
+    assert flags == {SHA_A: False, SHA_B: True}
+
+
+async def test_merging_a_pull_request_flips_all_its_commits_and_the_flag_never_goes_back(
+    api: ApiContext,
+) -> None:
+    await deliver(api, "push", push_payload(ref="refs/heads/feature/x"))
+
+    await deliver(api, "push", push_payload(ref="refs/heads/main"))  # the merge pushes both again
+    assert {c.on_default_branch for c in await stored_commits(api)} == {True}
+
+    await deliver(api, "push", push_payload(ref="refs/heads/feature/x"))  # a late redelivery
+    assert {c.on_default_branch for c in await stored_commits(api)} == {True}

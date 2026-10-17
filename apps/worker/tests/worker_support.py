@@ -3,7 +3,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import aliased
 
@@ -191,6 +191,14 @@ class WorkerContext:
             session.add(row)
             await session.flush()
             return row.id
+
+    async def set_on_default_branch(self, sha: str, value: bool | None) -> None:
+        async with self.deps.session_factory() as session, session.begin():
+            await session.execute(
+                update(Commit)
+                .where(Commit.repository_id == self.repository_id, Commit.sha == sha)
+                .values(on_default_branch=value)
+            )
 
     async def add_commit_row(self, sha: str, message: str = "change") -> None:
         async with self.deps.session_factory() as session, session.begin():

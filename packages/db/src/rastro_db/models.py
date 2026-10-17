@@ -7,6 +7,7 @@ from typing import Any
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -74,8 +75,12 @@ class Commit(Base):
     message: Mapped[str | None] = mapped_column(Text)
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # analyzed | analysis_failed | skipped_no_session | skipped_budget | NULL (not analyzed yet)
+    # analyzed | analysis_failed | skipped_no_session | skipped_budget | skipped_quota |
+    # awaiting_merge (has a session but is not on the default branch yet) | NULL (not analyzed yet)
     analysis_status: Mapped[str | None] = mapped_column(Text)
+    # Set by the push webhook: True once the commit is part of the default branch. NULL = unknown
+    # (rows from before the flag, or created by tools); only an explicit False defers extraction.
+    on_default_branch: Mapped[bool | None] = mapped_column(Boolean)
 
 
 class AgentSession(Base):

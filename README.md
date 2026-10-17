@@ -177,6 +177,12 @@ the balance was empty gets no comment at all, so push to it again once credit is
 
 ## Rule extraction (phase 5)
 
+Rules describe the default branch. Extraction runs only for commits that are on it: a commit with
+a session pushed to a feature branch is marked `awaiting_merge`, and the push that merges it (a merge
+commit pushes the PR's commits again) releases it. This way a pull request is analysed against the
+rules as they were before it, and a PR that is never merged never changes them. Squash and rebase
+merges create new commit SHAs without a session, so their rules are not learned yet.
+
 For every commit with a captured session, the worker's `rule_extraction` job sends the diff, the
 user requests, the changed symbols and the rules already anchored to them to the model, validates
 the answer and stores rules, origins and anchors (plus exact/embedding duplicates). Set

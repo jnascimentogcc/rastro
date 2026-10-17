@@ -12,7 +12,7 @@ from typing import Any
 
 import procrastinate
 from fastapi import APIRouter, HTTPException, Request, status
-from sqlalchemy import func, select, update
+from sqlalchemy import false, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -209,22 +209,32 @@ async def _on_push(
     if not commits:
         return False
 
+    on_default_branch = ref == f"refs/heads/{repo.get('default_branch', 'main')}"
     for entry in commits.values():
         author = entry.get("author") or {}
+        statement = insert(Commit).values(
+            repository_id=repository_id,
+            sha=entry["id"],
+            author=author.get("name") or author.get("username"),
+            message=entry.get("message"),
+            committed_at=_parse_time(entry.get("timestamp")),
+            on_default_branch=on_default_branch,
+        )
+        # A commit pushed to a feature branch becomes a default-branch commit when its PR is
+        # merged (a merge commit pushes the PR commits again); it never goes back.
         await session.execute(
-            insert(Commit)
-            .values(
-                repository_id=repository_id,
-                sha=entry["id"],
-                author=author.get("name") or author.get("username"),
-                message=entry.get("message"),
-                committed_at=_parse_time(entry.get("timestamp")),
+            statement.on_conflict_do_update(
+                index_elements=["repository_id", "sha"],
+                set_={
+                    "on_default_branch": or_(
+                        func.coalesce(Commit.on_default_branch, false()),
+                        statement.excluded.on_default_branch,
+                    )
+                },
             )
-            .on_conflict_do_nothing(index_elements=["repository_id", "sha"])
         )
     await session.commit()
 
-    on_default_branch = ref == f"refs/heads/{repo.get('default_branch', 'main')}"
     for sha in commits:
         await enqueue(
             queue, "analyze_commit", repository_id, sha=sha, on_default_branch=on_default_branch
