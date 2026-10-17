@@ -177,7 +177,7 @@ async def _analyze_head(
         head.analyses[change.path] = analysis
         head.sources[change.path] = text
         head.hashes.update(s.body_hash for s in analysis.symbols if s.kind != "class")
-        hit = touched_symbols(list(analysis.symbols), change.patch)
+        hit = touched_symbols(list(analysis.symbols), change.patch, analysis.declarations)
         if hit:
             head.touched[change.path] = hit
     return head

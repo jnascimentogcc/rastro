@@ -3,7 +3,7 @@
 import re
 from collections.abc import Sequence
 
-from rastro_code_analysis.models import Symbol
+from rastro_code_analysis.models import Declaration, Symbol
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
@@ -51,19 +51,38 @@ def _overlaps(symbol: Symbol, ranges: Sequence[LineRange]) -> bool:
     return any(start <= symbol.end_line and end >= symbol.start_line for start, end in ranges)
 
 
-def touched_symbols(symbols: Sequence[Symbol], patch: str | None) -> list[Symbol]:
+def touched_symbols(
+    symbols: Sequence[Symbol],
+    patch: str | None,
+    declarations: Sequence[Declaration] = (),
+) -> list[Symbol]:
     """Symbols whose lines overlap the patch. Without a patch (binary or oversized diff) every
     symbol counts as touched.
 
     A class is reported only when a changed line falls inside it but outside all its methods
     (a field, a decorator, the signature); otherwise the touched methods already tell the story.
+
+    A changed module-level declaration (`const MIN_NOTICE = 24 * HOUR`) lies outside every symbol
+    but changes the behaviour of the functions and methods that reference it, so those count as
+    touched too.
     """
     if patch is None:
         return list(symbols)
     ranges = changed_line_ranges(patch)
+    changed_names = {
+        d.name
+        for d in declarations
+        if any(start <= d.end_line and end >= d.start_line for start, end in ranges)
+    }
     touched: list[Symbol] = []
     for symbol in symbols:
-        if not _overlaps(symbol, ranges):
+        uses_changed_declaration = symbol.kind != "class" and bool(
+            changed_names.intersection(symbol.references)
+        )
+        if not _overlaps(symbol, ranges) and not uses_changed_declaration:
+            continue
+        if uses_changed_declaration and not _overlaps(symbol, ranges):
+            touched.append(symbol)
             continue
         if symbol.kind == "class":
             methods = [

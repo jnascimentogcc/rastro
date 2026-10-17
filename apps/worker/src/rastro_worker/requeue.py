@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rastro_db import create_engine, create_session_factory
 from rastro_db.models import Commit
+from rastro_worker.app import build_app  # also selects the event loop psycopg needs on Windows
 
 DEFAULT_STATUSES = ("skipped_quota", "skipped_budget")
 
@@ -44,8 +45,6 @@ async def requeue_skipped_commits(
 
 
 async def main_async(statuses: tuple[str, ...], repository_id: uuid.UUID | None) -> int:
-    from rastro_worker.app import build_app
-
     engine = create_engine()
     queue = build_app()
     try:
