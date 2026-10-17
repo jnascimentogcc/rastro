@@ -169,6 +169,12 @@ there is budget), impact analysis returns `skipped_budget` without commenting, a
 --query` falls back to text search. A job already running can overshoot by what it spends itself.
 Unset or `0` means unlimited.
 
+If the OpenAI account runs out of credit the jobs do not retry (it cannot help): the affected commits
+get the status `skipped_quota` and the worker logs an error. After topping up, run
+`uv run --env-file .env python -m rastro_worker.requeue` to analyse them (it also re-queues
+`skipped_budget` commits; `--status` and `--repository-id` narrow it). A pull request analysed while
+the balance was empty gets no comment at all, so push to it again once credit is back.
+
 ## Rule extraction (phase 5)
 
 For every commit with a captured session, the worker's `rule_extraction` job sends the diff, the

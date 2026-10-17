@@ -10,6 +10,7 @@ from rastro_llm import (
     ExtractedRule,
     FakeProvider,
     LLMError,
+    LLMQuotaError,
     LLMSettings,
     LLMTransientError,
     OpenAIProvider,
@@ -213,3 +214,42 @@ async def test_only_retryable_provider_errors_are_marked_transient(
         await provider.extract("p", RuleExtraction)
 
     assert isinstance(raised.value, LLMTransientError) is transient
+
+
+def _rate_limit(code: str) -> openai.RateLimitError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    body = {"error": {"message": "limit", "type": "x", "code": code}}
+    response = httpx.Response(429, request=request, json=body)
+    # The SDK is typed against its own httpx copy; the real class is compatible at runtime.
+    return openai.RateLimitError("limit", response=response, body=body["error"])  # type: ignore[arg-type]
+
+
+def _failing_client(error: Exception) -> Any:
+    async def fail(**kwargs: Any) -> Any:
+        raise error
+
+    return SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(parse=fail)),
+        embeddings=SimpleNamespace(create=fail),
+    )
+
+
+@pytest.mark.parametrize("code", ["insufficient_quota", "credit_balance_exhausted"])
+async def test_an_empty_balance_is_a_quota_error_and_not_a_transient_one(code: str) -> None:
+    provider = OpenAIProvider(settings(), client=_failing_client(_rate_limit(code)))
+
+    with pytest.raises(LLMQuotaError) as extract_error:
+        await provider.extract("p", RuleExtraction)
+    with pytest.raises(LLMQuotaError):
+        await provider.embed(["text"])  # embeddings share the account
+
+    assert not isinstance(extract_error.value, LLMTransientError)
+
+
+async def test_a_real_rate_limit_stays_transient() -> None:
+    provider = OpenAIProvider(
+        settings(), client=_failing_client(_rate_limit("rate_limit_exceeded"))
+    )
+
+    with pytest.raises(LLMTransientError):
+        await provider.extract("p", RuleExtraction)

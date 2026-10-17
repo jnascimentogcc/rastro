@@ -130,3 +130,9 @@ async def test_permanent_failure_is_not_retried(monkeypatch: pytest.MonkeyPatch)
 
     assert result["status"] == "failed"
     assert result["attempts"] == 1
+
+
+def test_an_empty_llm_balance_is_permanent() -> None:
+    from rastro_llm import LLMQuotaError
+
+    assert not is_transient(LLMQuotaError("credit_balance_exhausted"))

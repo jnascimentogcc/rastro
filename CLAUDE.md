@@ -60,6 +60,7 @@ Rules query (`apps/api/src/rastro_api/routers/rules.py`, `packages/cli/src/rastr
 - `apps/worker/src/rastro_worker/retry.py`: `retry_transient` on all five pipeline tasks; `is_transient` decides (GitHub 5xx/429/rate limit/timeouts, `LLMTransientError`, connection loss). Transient `LLMTransientError` propagates out of extraction/impact (job retries) instead of becoming `analysis_failed`.
 - `repositories.status` (`active|suspended|uninstalled`) gates webhooks, jobs (`tasks.repository_is_active`) and `POST /v1/sessions` (403). Data is never deleted. `webhook_deliveries` holds processed delivery ids (inserted in the handler's transaction).
 - `GithubKitClient.list_files` walks the tree per directory when GitHub reports `truncated`.
+- Empty OpenAI balance: HTTP 429 with code `insufficient_quota`/`credit_balance_exhausted` is `LLMQuotaError` (not `LLMTransientError`, so never retried). `rule_extraction` (including its embedding step, which runs before any write) marks the commit `skipped_quota`, logs an ERROR saying what to do and returns normally; `analyze_pr` logs, returns `skipped_quota`, and posts and stores nothing (silence must not read as "no rules affected"). `python -m rastro_worker.requeue [--status ...] [--repository-id ...]` re-queues `skipped_quota` and `skipped_budget` commits with `force=True` once credit/budget is back.
 - Token budget: `LLM_MONTHLY_TOKEN_BUDGET`, `rastro_db.budget`, `WorkerDeps.over_budget`; statuses `skipped_budget` (commit `analysis_status`, `ExtractionSummary`, `ImpactResult`).
 
 ## Spec rules to respect
