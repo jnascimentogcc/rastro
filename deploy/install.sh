@@ -48,7 +48,7 @@ echo "    RAM: ${RAM_MB} MB total, ${AVAILABLE_MB} MB available (Rastro needs ab
 step "Network, folders and permissions"
 docker network inspect proxy >/dev/null 2>&1 || { docker network create proxy >/dev/null; echo "    network proxy created"; }
 mkdir -p backups secrets
-chmod 700 backups secrets
+chmod 700 backups
 
 step "Settings (.env)"
 [ -f "$ENV_FILE" ] || { cp deploy/env.prod.example "$ENV_FILE"; echo "    .env created from deploy/env.prod.example"; }
@@ -73,12 +73,16 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
   fi
   exit 0
 fi
+# The containers run as uid 10001: it must own the folder (mode 700 would otherwise lock it out) and the key.
+chown -R 10001:10001 secrets 2>/dev/null || fail "could not give secrets/ to uid 10001; run this script as root."
+chmod 700 secrets
 chmod 600 secrets/github-app.private-key.pem
-# The containers run as uid 10001 and must read the key.
-chown 10001 secrets/github-app.private-key.pem 2>/dev/null || warn "could not chown the key to uid 10001; run as root or make it readable."
 
 step "Build and start (the first time takes a few minutes)"
 "${COMPOSE[@]}" up --build -d
+
+step "Checking that the containers can read the GitHub App key"
+"${COMPOSE[@]}" exec -T worker test -r /secrets/github-app.private-key.pem || fail "the worker cannot read /secrets/github-app.private-key.pem (check the owner of secrets/ is uid 10001)."
 
 step "Waiting for healthy"
 ok=0
