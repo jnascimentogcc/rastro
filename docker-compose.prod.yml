@@ -1,0 +1,100 @@
+# Production stack for a shared server (next to Azmt and Radar Publico).
+#
+#   docker compose -f docker-compose.prod.yml up --build -d
+#
+# Nothing is published on the host: the shared Caddy (container azmt-caddy) reaches `rastro-api`
+# over the external Docker network `proxy` (docker network create proxy). Postgres and the worker
+# stay on this project's private network. Required settings come from .env (see
+# deploy/env.prod.example); deploy/install.sh generates the secrets.
+name: rastro
+
+x-app: &app
+  env_file: .env
+  environment: &app-environment
+    DATABASE_URL: postgresql+asyncpg://rastro:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/rastro
+    GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.private-key.pem
+    EXCERPTS_ENCRYPTION_KEYS: ${EXCERPTS_ENCRYPTION_KEYS:?set EXCERPTS_ENCRYPTION_KEYS in .env}
+    GITHUB_APP_ID: ${GITHUB_APP_ID:?set GITHUB_APP_ID in .env}
+    GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set GITHUB_WEBHOOK_SECRET in .env}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
+    LLM_MODEL: ${LLM_MODEL:?set LLM_MODEL in .env}
+    EMBEDDING_MODEL: ${EMBEDDING_MODEL:?set EMBEDDING_MODEL in .env}
+  volumes:
+    - ./secrets:/secrets:ro
+  security_opt:
+    - no-new-privileges:true
+  logging: &logging
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rastro-db
+    environment:
+      POSTGRES_USER: rastro
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: rastro
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rastro -d rastro"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    logging: *logging
+    restart: unless-stopped
+
+  # One-shot and idempotent: Alembic migrations, then the Procrastinate schema.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    image: rastro-worker
+    <<: *app
+    working_dir: /app/db
+    command: ["sh", "-c", "alembic upgrade head && python -m rastro_worker.schema"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: rastro-api
+    container_name: rastro-api
+    <<: *app
+    networks:
+      - default
+      - proxy
+    mem_limit: 384m
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    image: rastro-worker
+    container_name: rastro-worker
+    <<: *app
+    mem_limit: 512m
+    # Let a running job finish before a deploy restarts the worker.
+    stop_grace_period: 2m
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+networks:
+  proxy:
+    external: true
+
+volumes:
+  pgdata:

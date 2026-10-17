@@ -1,0 +1,13 @@
+# Block to add to the shared Caddyfile (azmt/deploy/Caddyfile), next to the Radar one.
+# Only what the GitHub App and the CLI need is public; /docs and /openapi.json are not.
+rastro.karpaai.com {
+	header Strict-Transport-Security "max-age=31536000"
+
+	@public path /webhooks/github /health /v1/*
+	handle @public {
+		reverse_proxy rastro-api:8000
+	}
+	handle {
+		respond "Not found" 404
+	}
+}
