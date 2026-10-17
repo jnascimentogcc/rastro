@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -47,3 +48,43 @@ class SessionCaptureOut(BaseModel):
 class WhoAmIOut(BaseModel):
     repository_id: uuid.UUID
     full_name: str
+
+
+class AnchorOut(BaseModel):
+    file_path: str
+    qualified_name: str
+    role: str  # primary | duplicate
+    status: str  # active | removed
+    start_line: int | None
+    end_line: int | None
+
+
+class OriginOut(BaseModel):
+    commit_sha: str
+    quote: str | None
+    committed_at: datetime | None
+    session_ref: str | None
+
+
+class RuleOut(BaseModel):
+    id: uuid.UUID
+    statement: str
+    rationale: str | None  # null = unknown origin, never guessed
+    confidence: float
+    status: str  # active | orphaned | superseded
+    created_at: datetime
+    updated_at: datetime
+    files: list[str]
+    origin: OriginOut | None  # the earliest commit that produced the rule
+    similarity: float | None = None  # only for semantic search
+
+
+class RuleDetailOut(RuleOut):
+    origins: list[OriginOut]
+    anchors: list[AnchorOut]
+
+
+class RuleListOut(BaseModel):
+    items: list[RuleOut]
+    total: int
+    search: Literal["semantic", "text"] | None

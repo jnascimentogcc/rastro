@@ -1741,6 +1741,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "rastro-db" },
     { name = "rastro-github" },
+    { name = "rastro-llm" },
     { name = "rastro-worker" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1751,6 +1752,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9" },
     { name = "rastro-db", editable = "packages/db" },
     { name = "rastro-github", editable = "packages/github" },
+    { name = "rastro-llm", editable = "packages/llm" },
     { name = "rastro-worker", editable = "apps/worker" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]

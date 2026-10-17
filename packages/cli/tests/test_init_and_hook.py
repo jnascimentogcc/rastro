@@ -43,6 +43,7 @@ def test_init_verifies_token_stores_it_in_keychain_and_installs_hook(
 
     config = load_config(repo)
     assert config is not None and config.api_url == "http://rastro.test"
+    assert config.repository_id == "r"
     assert "rst_secret" not in (repo / ".rastro" / "config.json").read_text()
     assert load_token(repo) == "rst_secret"
     assert list(isolated_environment.store.values()) == ["rst_secret"]

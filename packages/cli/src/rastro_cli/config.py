@@ -14,6 +14,7 @@ TOKEN_ENV_VAR = "RASTRO_TOKEN"
 @dataclass(frozen=True)
 class Config:
     api_url: str
+    repository_id: str | None = None  # cached from the server by `rastro init`
 
 
 def data_dir(root: Path) -> Path:
@@ -35,7 +36,11 @@ def config_path(root: Path) -> Path:
 def load_config(root: Path) -> Config | None:
     try:
         raw = json.loads(config_path(root).read_text(encoding="utf-8"))
-        return Config(api_url=str(raw["api_url"]).rstrip("/"))
+        repository_id = raw.get("repository_id")
+        return Config(
+            api_url=str(raw["api_url"]).rstrip("/"),
+            repository_id=str(repository_id) if repository_id else None,
+        )
     except (OSError, ValueError, KeyError):
         return None
 
@@ -43,7 +48,10 @@ def load_config(root: Path) -> Config | None:
 def save_config(root: Path, config: Config) -> None:
     path = config_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"api_url": config.api_url}, indent=2) + "\n", encoding="utf-8")
+    data = {"api_url": config.api_url}
+    if config.repository_id:
+        data["repository_id"] = config.repository_id
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def _keyring_user(root: Path) -> str:
