@@ -1852,6 +1852,7 @@ source = { editable = "apps/worker" }
 dependencies = [
     { name = "procrastinate" },
     { name = "psycopg", extra = ["binary", "pool"] },
+    { name = "pydantic-settings" },
     { name = "rastro-code-analysis" },
     { name = "rastro-db" },
     { name = "rastro-github" },
@@ -1862,6 +1863,7 @@ dependencies = [
 requires-dist = [
     { name = "procrastinate", extras = ["psycopg"], specifier = ">=2.0" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
+    { name = "pydantic-settings", specifier = ">=2.6" },
     { name = "rastro-code-analysis", editable = "packages/code_analysis" },
     { name = "rastro-db", editable = "packages/db" },
     { name = "rastro-github", editable = "packages/github" },

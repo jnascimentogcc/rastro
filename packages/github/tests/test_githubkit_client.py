@@ -130,3 +130,105 @@ def test_private_key_accepts_escaped_newlines_and_files(tmp_path, private_key_pe
 
     assert escaped.private_key() == private_key_pem
     assert from_file.private_key() == private_key_pem
+
+
+def diff_entry(name: str, status: str = "modified", **extra: object) -> dict[str, object]:
+    return {
+        "sha": f"sha-{name}",
+        "filename": name,
+        "status": status,
+        "additions": 1,
+        "deletions": 1,
+        "changes": 2,
+        "blob_url": "https://github.com/o/r/blob/x",
+        "raw_url": "https://github.com/o/r/raw/x",
+        "contents_url": "https://api.github.com/repos/o/r/contents/x",
+        **extra,
+    }
+
+
+async def test_pull_request_files_are_paginated_and_mapped(private_key_pem: str) -> None:
+    pages: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        assert request.url.path == "/repos/acme/clinic/pulls/5/files"
+        pages.append(request.url.params["page"])
+        if request.url.params["page"] == "1":
+            patch = "@@ -1 +1 @@\n-a\n+b"
+            batch = [diff_entry(f"src/f{i}.ts", patch=patch) for i in range(100)]
+        else:
+            batch = [
+                diff_entry("src/new.ts", "added"),
+                diff_entry("src/gone.ts", "removed"),
+                diff_entry("src/moved.ts", "renamed", previous_filename="src/old.ts"),
+            ]
+        return httpx.Response(200, json=batch)
+
+    client = make_client(private_key_pem, httpx.MockTransport(handler))
+
+    files = await client.get_pull_request_files(111, "acme/clinic", 5)
+
+    assert pages == ["1", "2"] and len(files) == 103
+    by_path = {f.path: f for f in files}
+    assert (
+        by_path["src/f0.ts"].patch is not None and by_path["src/f0.ts"].blob_sha == "sha-src/f0.ts"
+    )
+    assert by_path["src/new.ts"].status == "added" and by_path["src/new.ts"].patch is None
+    assert by_path["src/gone.ts"].status == "removed" and by_path["src/gone.ts"].blob_sha is None
+    assert by_path["src/moved.ts"].previous_path == "src/old.ts"
+
+
+def comment_json(comment_id: int, body: str) -> dict[str, object]:
+    return {
+        "id": comment_id,
+        "node_id": "n",
+        "url": "https://api.github.com/x",
+        "html_url": "https://github.com/x",
+        "body": body,
+        "user": None,
+        "created_at": "2026-10-01T10:00:00Z",
+        "updated_at": "2026-10-01T10:00:00Z",
+        "issue_url": "https://api.github.com/x",
+        "author_association": "NONE",
+    }
+
+
+async def test_comments_are_created_on_the_issue_endpoint_and_updated_in_place(
+    private_key_pem: str,
+) -> None:
+    seen: list[tuple[str, str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        body = httpx.Request("x", "http://x", content=request.content).content.decode()
+        seen.append((request.method, request.url.path, body))
+        if request.method == "POST":
+            return httpx.Response(201, json=comment_json(42, "hello"))
+        return httpx.Response(200, json=comment_json(42, "edited"))
+
+    client = make_client(private_key_pem, httpx.MockTransport(handler))
+
+    comment_id = await client.create_comment(112, "acme/clinic", 5, "hello")
+    await client.update_comment(112, "acme/clinic", comment_id, "edited")
+
+    assert comment_id == 42
+    assert seen[0][:2] == ("POST", "/repos/acme/clinic/issues/5/comments")
+    assert seen[1][:2] == ("PATCH", "/repos/acme/clinic/issues/comments/42")
+    assert "edited" in seen[1][2]
+
+
+async def test_updating_a_deleted_comment_raises_a_specific_error(private_key_pem: str) -> None:
+    from rastro_github import CommentNotFoundError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    client = make_client(private_key_pem, httpx.MockTransport(handler))
+
+    with pytest.raises(CommentNotFoundError):
+        await client.update_comment(113, "acme/clinic", 42, "x")

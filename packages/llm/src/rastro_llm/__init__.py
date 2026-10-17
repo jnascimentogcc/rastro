@@ -1,4 +1,5 @@
 from rastro_llm.fake import FakeProvider, hashing_embedding
+from rastro_llm.impact_prompt import ImpactContext, build_impact_prompt
 from rastro_llm.openai_provider import OpenAIProvider
 from rastro_llm.prompts import (
     ExtractionContext,
@@ -9,12 +10,14 @@ from rastro_llm.prompts import (
     build_extraction_prompt,
 )
 from rastro_llm.provider import LLMError, LLMProvider, Usage, UsageSink
-from rastro_llm.schemas import ExtractedRule, RuleExtraction
+from rastro_llm.schemas import ExtractedRule, ImpactAssessment, Risk, RuleExtraction
 from rastro_llm.settings import LLMSettings
 
 __all__ = [
     "ExtractedRule",
     "ExtractionContext",
+    "ImpactAssessment",
+    "ImpactContext",
     "FakeProvider",
     "LLMError",
     "LLMProvider",
@@ -24,9 +27,11 @@ __all__ = [
     "PromptFileDiff",
     "PromptRule",
     "PromptSymbol",
+    "Risk",
     "RuleExtraction",
     "Usage",
     "UsageSink",
     "build_extraction_prompt",
+    "build_impact_prompt",
     "hashing_embedding",
 ]

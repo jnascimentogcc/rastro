@@ -22,3 +22,21 @@ class GitHubClient(Protocol):
     async def get_commit_files(
         self, installation_id: int, full_name: str, sha: str
     ) -> list[ChangedFile]: ...
+
+    async def get_pull_request_files(
+        self, installation_id: int, full_name: str, number: int
+    ) -> list[ChangedFile]:
+        """Files of a pull request against its base, with patches and head blob SHAs."""
+        ...
+
+    async def create_comment(
+        self, installation_id: int, full_name: str, number: int, body: str
+    ) -> int:
+        """Post a comment on a pull request; returns its id."""
+        ...
+
+    async def update_comment(
+        self, installation_id: int, full_name: str, comment_id: int, body: str
+    ) -> None:
+        """Edit a comment in place. Raises CommentNotFoundError if it was deleted."""
+        ...

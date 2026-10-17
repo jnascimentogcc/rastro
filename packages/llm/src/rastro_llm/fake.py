@@ -46,7 +46,7 @@ class FakeProvider:
         usage_sink: UsageSink | None = None,
     ) -> None:
         self._queue: deque[BaseModel | Exception] = deque(responses or [])
-        self._responder = responder
+        self.responder = responder
         self._dimensions = dimensions
         self._usage_sink = usage_sink
         self.calls: list[RecordedCall] = []
@@ -73,8 +73,8 @@ class FakeProvider:
             if isinstance(item, Exception):
                 raise item
             response = item
-        elif self._responder is not None:
-            response = self._responder(prompt, schema)
+        elif self.responder is not None:
+            response = self.responder(prompt, schema)
         else:
             raise LLMError("FakeProvider has no response queued")
         if not isinstance(response, schema):

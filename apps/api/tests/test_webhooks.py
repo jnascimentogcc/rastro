@@ -214,7 +214,47 @@ async def test_pushes_without_commits_to_analyze_are_ignored(
     assert api.queue.jobs == {}
 
 
-async def test_pull_request_events_are_accepted_but_not_handled_yet(api: ApiContext) -> None:
-    response = await deliver(api, "pull_request", {"action": "opened"})
+def pull_request_payload(action: str = "opened", sha: str = SHA_A) -> dict[str, Any]:
+    return {
+        "action": action,
+        "number": 7,
+        "installation": {"id": 4242},
+        "repository": {
+            "id": GITHUB_ID,
+            "full_name": "acme/webhook-clinic",
+            "default_branch": "main",
+        },
+        "pull_request": {"number": 7, "head": {"sha": sha}, "draft": False},
+    }
+
+
+@pytest.mark.parametrize("action", ["opened", "synchronize", "reopened", "ready_for_review"])
+async def test_pull_request_activity_queues_an_impact_analysis(
+    api: ApiContext, action: str
+) -> None:
+    response = await deliver(api, "pull_request", pull_request_payload(action))
+
+    assert response.status_code == 202 and response.json()["handled"] is True
+    [job] = api.jobs("analyze_pr")
+    assert job["args"]["number"] == 7 and job["args"]["head_sha"] == SHA_A  # type: ignore[index]
+    assert job["lock"] == job["args"]["repository_id"]  # type: ignore[index]
+    async with create_session_factory(api.engine)() as session:
+        repo = await session.scalar(select(Repository).where(Repository.github_id == GITHUB_ID))
+    assert repo is not None and repo.installation_id == 4242
+
+
+async def test_a_waiting_analysis_absorbs_further_pushes_to_the_same_pull_request(
+    api: ApiContext,
+) -> None:
+    await deliver(api, "pull_request", pull_request_payload("opened", SHA_A))
+    await deliver(api, "pull_request", pull_request_payload("synchronize", SHA_B))
+
+    assert len(api.jobs("analyze_pr")) == 1  # it reads the latest state when it runs
+
+
+@pytest.mark.parametrize("action", ["closed", "labeled", "edited", "assigned"])
+async def test_other_pull_request_actions_are_ignored(api: ApiContext, action: str) -> None:
+    response = await deliver(api, "pull_request", pull_request_payload(action))
 
     assert response.status_code == 202 and response.json()["handled"] is False
+    assert api.queue.jobs == {}

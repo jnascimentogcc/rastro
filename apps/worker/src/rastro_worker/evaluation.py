@@ -13,15 +13,17 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pydantic import BaseModel
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rastro_db.models import AgentSession, Commit, LlmCall, Repository, Rule, Symbol
+from rastro_db.models import AgentSession, Commit, LlmCall, PrAnalysis, Repository, Rule, Symbol
 from rastro_github import ChangedFile
 from rastro_github.testing import FakeGitHub, blob_sha
-from rastro_llm import ExtractedRule, FakeProvider, LLMProvider, RuleExtraction
+from rastro_llm import ExtractedRule, FakeProvider, ImpactAssessment, LLMProvider, RuleExtraction
 from rastro_worker import indexing
 from rastro_worker.deps import WorkerDeps
+from rastro_worker.impact import analyze_pull_request
 from rastro_worker.rule_extraction import extract_rules
 
 SUCCESS_THRESHOLD = 0.8
@@ -86,6 +88,49 @@ def load_fixture(root: Path) -> list[FixtureCommit]:
     return commits
 
 
+@dataclass(frozen=True)
+class OracleVerdict:
+    match: list[list[str]]  # keyword groups identifying the rule that must be flagged
+    risk: str
+
+
+@dataclass(frozen=True)
+class FixturePr:
+    """A pull request applied on top of the final state of the fixture history."""
+
+    name: str
+    title: str
+    expect_warning: bool
+    oracle: list[OracleVerdict]
+    files: dict[str, str]
+
+
+def load_pull_requests(root: Path) -> list[FixturePr]:
+    prs_root = root / "prs"
+    if not prs_root.is_dir():
+        return []
+    prs: list[FixturePr] = []
+    for directory in sorted(prs_root.iterdir()):
+        if not directory.is_dir():
+            continue
+        data = json.loads((directory / "pr.json").read_text(encoding="utf-8"))
+        files_root = directory / "files"
+        prs.append(
+            FixturePr(
+                name=directory.name,
+                title=data["title"],
+                expect_warning=data["expect_warning"],
+                oracle=[OracleVerdict(v["match"], v["risk"]) for v in data["oracle"]],
+                files={
+                    path.relative_to(files_root).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(files_root.rglob("*"))
+                    if path.is_file()
+                },
+            )
+        )
+    return prs
+
+
 # --------------------------------------------------------------------------- results
 
 
@@ -112,8 +157,23 @@ class CommitResult:
 
 
 @dataclass
+class PrResult:
+    name: str
+    expect_warning: bool
+    warned: bool = False
+    flagged: list[str] = field(default_factory=list)  # statements of the rules reported
+    details: list[str] = field(default_factory=list)  # "risk (confidence): explanation"
+    relevant: bool = True  # the warning (or its absence) is what the fixture expects
+
+    @property
+    def irrelevant_comment(self) -> bool:
+        return self.warned and not self.relevant
+
+
+@dataclass
 class Report:
     commits: list[CommitResult]
+    pull_requests: list[PrResult] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float | None = None
@@ -151,8 +211,21 @@ class Report:
         return sum(c.false_positive for c in self.commits)
 
     @property
+    def pr_missed_warnings(self) -> int:
+        return sum(p.expect_warning and not p.warned for p in self.pull_requests)
+
+    @property
+    def pr_irrelevant_comments(self) -> int:
+        return sum(p.irrelevant_comment for p in self.pull_requests)
+
+    @property
+    def pr_ok(self) -> bool:
+        """Spec section 2: fewer than 1 irrelevant comment per 5 pull requests."""
+        return self.pr_irrelevant_comments * 5 < max(1, len(self.pull_requests))
+
+    @property
     def passed(self) -> bool:
-        return self.success_rate >= SUCCESS_THRESHOLD
+        return self.success_rate >= SUCCESS_THRESHOLD and self.pr_ok
 
 
 def _ratio(numerator: int, denominator: int) -> float:
@@ -181,6 +254,17 @@ def format_report(report: Report, *, verbose: bool = False) -> str:
                 if event.matched and not event.update_ok:
                     problems.append("did not update the existing rule")
                 lines.append(f"    - {event.expected.id}: {', '.join(problems)}")
+    if report.pull_requests:
+        lines += ["", f"{'pull request':<34} expected  warned  verdict"]
+        for pr in report.pull_requests:
+            verdict = "ok" if pr.relevant else ("IRRELEVANT COMMENT" if pr.warned else "MISSED")
+            lines.append(
+                f"{pr.name:<34} {'warn' if pr.expect_warning else 'quiet':>8}  "
+                f"{'yes' if pr.warned else 'no':>6}  {verdict}"
+            )
+            if verbose:
+                lines += [f"    > {statement}" for statement in pr.flagged]
+                lines += [f"      {detail}" for detail in pr.details]
     cost = "unknown" if report.cost_usd is None else f"${report.cost_usd:.4f}"
     lines += [
         "",
@@ -189,6 +273,8 @@ def format_report(report: Report, *, verbose: bool = False) -> str:
         f"reason accuracy:      {report.rationale_accuracy:.0%}",
         f"update accuracy:      {report.update_accuracy:.0%}",
         f"false-positive commits: {report.false_positive_commits}",
+        f"PR missed warnings:   {report.pr_missed_warnings}, irrelevant comments: "
+        f"{report.pr_irrelevant_comments} of {len(report.pull_requests)} PRs",
         f"SUCCESS RATE:         {report.success_rate:.0%} (target {SUCCESS_THRESHOLD:.0%}) "
         f"-> {'PASS' if report.passed else 'FAIL'}",
         f"model calls: {report.model_calls}, tokens in/out: {report.input_tokens}/"
@@ -234,17 +320,106 @@ def _oracle_response(commit: FixtureCommit, rule_ids: dict[str, uuid.UUID]) -> R
     )
 
 
+def _oracle_impact_responder(pr: FixturePr) -> Callable[[str, type[BaseModel]], BaseModel]:
+    """Answers each rule of a pull request analysis the way the fixture says it should be."""
+
+    def respond(prompt: str, schema: type[BaseModel]) -> BaseModel:
+        statement = ""
+        for line in prompt.splitlines():
+            if line.startswith("statement: "):
+                statement = line.removeprefix("statement: ")
+                break
+        for verdict in pr.oracle:
+            if _statement_matches(statement, verdict.match):
+                return ImpactAssessment(
+                    behavior_changed=True,
+                    counterexample="The oracle knows an input that now behaves differently.",
+                    risk=verdict.risk,
+                    confidence=0.9,
+                    explanation="The oracle says this change affects the rule.",
+                )
+        return ImpactAssessment(
+            behavior_changed=False,
+            counterexample=None,
+            risk="none",
+            confidence=0.95,
+            explanation="Not affected.",
+        )
+
+    return respond
+
+
+async def _run_pull_request(
+    deps: WorkerDeps,
+    github: FakeGitHub,
+    repository_id: uuid.UUID,
+    full_name: str,
+    tree: dict[str, str],
+    number: int,
+    pr: FixturePr,
+) -> PrResult:
+    github.add_pull_request(
+        full_name,
+        number,
+        [
+            ChangedFile(
+                path,
+                "modified" if path in tree else "added",
+                blob_sha=blob_sha(content.encode()),
+                patch=_patch(tree.get(path, ""), content),
+            )
+            for path, content in pr.files.items()
+        ],
+        blobs=pr.files,
+    )
+    result = await analyze_pull_request(deps, repository_id, number, f"{number:040x}")
+    flagged: list[str] = []
+    details: list[str] = []
+    async with deps.session_factory() as session:
+        analysis = await session.scalar(
+            select(PrAnalysis).where(
+                PrAnalysis.repository_id == repository_id, PrAnalysis.pr_number == number
+            )
+        )
+        if analysis is not None:
+            details = [
+                f"{f['risk']} ({f['confidence']:.2f}): {f['explanation']}"
+                for f in analysis.findings
+                if f["reported"]
+            ]
+            reported_ids = [uuid.UUID(f["rule_id"]) for f in analysis.findings if f["reported"]]
+            if reported_ids:
+                flagged = list(
+                    await session.scalars(select(Rule.statement).where(Rule.id.in_(reported_ids)))
+                )
+    warned = result.commented and result.reported > 0
+    expected_rules = [v.match for v in pr.oracle]
+    relevant = (not warned and not pr.expect_warning) or (
+        warned
+        and pr.expect_warning
+        and all(
+            any(_statement_matches(statement, match) for statement in flagged)
+            for match in expected_rules
+        )
+    )
+    return PrResult(pr.name, pr.expect_warning, warned, flagged, details, relevant)
+
+
 async def run_evaluation(
     session_factory: async_sessionmaker[AsyncSession],
     fixture: list[FixtureCommit],
     *,
     llm: LLMProvider,
+    pull_requests: list[FixturePr] | None = None,
     oracle: FakeProvider | None = None,
+    impact_oracle: bool = True,
     keep_data: bool = False,
     on_commit: Callable[[str], Awaitable[None]] | None = None,
 ) -> Report:
     """Run every fixture commit through the real pipeline. Pass `oracle` (the same object given
-    as `llm`) to have it queue the ground-truth answer before each commit."""
+    as `llm`) to have it queue the ground-truth answer before each commit and answer the pull
+    request analyses from the fixture (unless `impact_oracle` is False, which keeps a custom
+    responder for them)."""
     repository_id = uuid.uuid4()
     full_name = f"fixture/clinica-demo-{repository_id.hex[:8]}"
     github = FakeGitHub()
@@ -312,6 +487,14 @@ async def run_evaluation(
             summary = await extract_rules(deps, repository_id, sha)
             report.commits.append(
                 await _score(session_factory, commit, summary.status, summary.rule_ids, rule_ids)
+            )
+        for number, pr in enumerate(pull_requests or [], start=1):
+            if on_commit is not None:
+                await on_commit(f"PR {pr.name}")
+            if oracle is not None and impact_oracle:
+                oracle.responder = _oracle_impact_responder(pr)
+            report.pull_requests.append(
+                await _run_pull_request(deps, github, repository_id, full_name, tree, number, pr)
             )
         (
             report.model_calls,
@@ -398,6 +581,7 @@ async def _cleanup(
 ) -> None:
     async with session_factory() as session, session.begin():
         await session.execute(delete(LlmCall).where(LlmCall.repository_id == repository_id))
+        await session.execute(delete(PrAnalysis).where(PrAnalysis.repository_id == repository_id))
         await session.execute(delete(Rule).where(Rule.repository_id == repository_id))
         await session.execute(delete(Symbol).where(Symbol.repository_id == repository_id))
         await session.execute(

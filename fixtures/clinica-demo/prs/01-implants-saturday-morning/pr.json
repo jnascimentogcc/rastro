@@ -1,0 +1,8 @@
+{
+  "title": "Allow implants on Saturday mornings",
+  "description": "Saturday mornings are free, so only block implants on Saturday afternoons. Changes the implant rule; the calendar copy of the check is left alone.",
+  "expect_warning": true,
+  "oracle": [
+    { "match": [["implant"], ["friday", "saturday"]], "risk": "changes" }
+  ]
+}

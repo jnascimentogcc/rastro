@@ -88,6 +88,22 @@ Measured on `fixtures/clinica-demo` (3 runs each, `text-embedding-3-small`): `gp
 91%, 1 false-positive commit in 2 of 3 runs), `gpt-6.1-sol` 100% in every run with no false positives and
 about half the output tokens. `gpt-6.1-sol` is the recommended `LLM_MODEL`.
 
+## Pull request impact analysis (phase 7)
+
+On `pull_request` events (`opened`, `synchronize`, `reopened`, `ready_for_review`) the API queues
+`analyze_pr`. The worker maps the PR onto the symbols it changes, picks the candidate rules
+(anchored to changed or deleted symbols, within two calls of them, or with unchanged copies), asks
+the model whether the change can break or change each one, and posts **one** comment that it edits
+in place on every push (and turns into an "all clear" if the warning no longer applies). Only
+findings above `IMPACT_THRESHOLD` (default 0.7) are reported, and a finding needs a real change of
+behaviour plus a concrete counterexample from the model; renames and moves are left to the anchor
+resync. `IMPACT_COMMENT_LANGUAGE` is `en` or `pt`; `IMPACT_MAX_CANDIDATES` caps model calls per PR.
+The GitHub App needs *Pull requests: read and write* (already in the setup above).
+
+`fixtures/clinica-demo/prs/` holds five pull requests (two that must warn, three that must not)
+that the evaluation runs after the commits; the criterion is fewer than 1 irrelevant comment per 5
+PRs. `--runs 3` reports it per run.
+
 Checks (the same ones CI runs):
 
 ```bash

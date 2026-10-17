@@ -1,0 +1,6 @@
+{
+  "title": "Extract the reminder lead time into a constant",
+  "description": "Same 48 hours, now a named constant.",
+  "expect_warning": false,
+  "oracle": []
+}

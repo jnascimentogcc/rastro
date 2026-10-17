@@ -6,7 +6,7 @@ from sqlalchemy import delete
 from worker_support import WorkerContext
 
 from rastro_db import create_engine, create_session_factory
-from rastro_db.models import AgentSession, Commit, LlmCall, Repository, Rule, Symbol
+from rastro_db.models import AgentSession, Commit, LlmCall, PrAnalysis, Repository, Rule, Symbol
 from rastro_github.testing import FakeGitHub
 from rastro_llm import FakeProvider
 from rastro_worker.deps import WorkerDeps, set_deps, usage_recorder
@@ -40,6 +40,7 @@ async def worker() -> AsyncIterator[WorkerContext]:
     set_deps(None)
     async with factory() as session, session.begin():
         await session.execute(delete(LlmCall).where(LlmCall.repository_id == repository_id))
+        await session.execute(delete(PrAnalysis).where(PrAnalysis.repository_id == repository_id))
         await session.execute(delete(Rule).where(Rule.repository_id == repository_id))
         await session.execute(delete(Symbol).where(Symbol.repository_id == repository_id))
         await session.execute(

@@ -3,8 +3,15 @@ from typing import Any
 
 import httpx
 from githubkit import AppAuthStrategy, GitHub
+from githubkit.exception import RequestFailed
 
-from rastro_github.models import ChangedFile, ChangeStatus, FileEntry, RepoInfo
+from rastro_github.models import (
+    ChangedFile,
+    ChangeStatus,
+    CommentNotFoundError,
+    FileEntry,
+    RepoInfo,
+)
 from rastro_github.settings import GitHubSettings
 
 _STATUS_MAP: dict[str, ChangeStatus] = {
@@ -17,6 +24,7 @@ _STATUS_MAP: dict[str, ChangeStatus] = {
 }
 _COMMIT_FILES_PER_PAGE = 100
 _COMMIT_FILES_MAX_PAGES = 30  # GitHub caps a commit at 3000 files
+_PR_FILES_MAX_PAGES = 30  # and a pull request at 3000 files
 
 
 class GithubKitClient:
@@ -108,3 +116,56 @@ class GithubKitClient:
             if len(files) < _COMMIT_FILES_PER_PAGE:
                 break
         return changed
+
+    async def get_pull_request_files(
+        self, installation_id: int, full_name: str, number: int
+    ) -> list[ChangedFile]:
+        owner, name = self._split(full_name)
+        github = self._for(installation_id)
+        changed: list[ChangedFile] = []
+        for page in range(1, _PR_FILES_MAX_PAGES + 1):
+            files: list[Any] = list(
+                (
+                    await github.rest.pulls.async_list_files(
+                        owner, name, number, per_page=_COMMIT_FILES_PER_PAGE, page=page
+                    )
+                ).parsed_data
+            )
+            for item in files:
+                status = _STATUS_MAP.get(item.status, "modified")
+                changed.append(
+                    ChangedFile(
+                        path=item.filename,
+                        status=status,
+                        blob_sha=None if status == "removed" else item.sha,
+                        previous_path=item.previous_filename or None,
+                        patch=item.patch or None,
+                    )
+                )
+            if len(files) < _COMMIT_FILES_PER_PAGE:
+                break
+        return changed
+
+    async def create_comment(
+        self, installation_id: int, full_name: str, number: int, body: str
+    ) -> int:
+        owner, name = self._split(full_name)
+        created = (
+            await self._for(installation_id).rest.issues.async_create_comment(
+                owner, name, number, body=body
+            )
+        ).parsed_data
+        return created.id
+
+    async def update_comment(
+        self, installation_id: int, full_name: str, comment_id: int, body: str
+    ) -> None:
+        owner, name = self._split(full_name)
+        try:
+            await self._for(installation_id).rest.issues.async_update_comment(
+                owner, name, comment_id, body=body
+            )
+        except RequestFailed as error:
+            if error.response.status_code == 404:
+                raise CommentNotFoundError(str(comment_id)) from error
+            raise

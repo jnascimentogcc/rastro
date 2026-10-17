@@ -3,7 +3,7 @@
 import hashlib
 from dataclasses import dataclass, field
 
-from rastro_github.models import ChangedFile, FileEntry, RepoInfo
+from rastro_github.models import ChangedFile, CommentNotFoundError, FileEntry, RepoInfo
 
 
 def blob_sha(content: bytes) -> str:
@@ -16,6 +16,7 @@ class _Repo:
     heads: dict[str, str] = field(default_factory=dict)  # branch -> commit sha
     trees: dict[str, dict[str, bytes]] = field(default_factory=dict)  # ref -> path -> content
     commits: dict[str, list[ChangedFile]] = field(default_factory=dict)
+    pulls: dict[int, list[ChangedFile]] = field(default_factory=dict)
 
 
 class FakeGitHub:
@@ -23,6 +24,9 @@ class FakeGitHub:
         self._repos: dict[str, _Repo] = {}
         self._blobs: dict[str, bytes] = {}
         self.calls: list[str] = []
+        self.comments: dict[int, str] = {}  # comment id -> body
+        self.comment_targets: dict[int, int] = {}  # comment id -> pull request number
+        self._next_comment_id = 1000
 
     def add_repo(self, github_id: int, full_name: str, default_branch: str = "main") -> None:
         self._repos[full_name] = _Repo(RepoInfo(github_id, full_name, default_branch))
@@ -37,6 +41,25 @@ class FakeGitHub:
             self._blobs[blob_sha(content)] = content
         if head_of is not None:
             repo.heads[head_of] = ref
+
+    def add_pull_request(
+        self,
+        full_name: str,
+        number: int,
+        files: list[ChangedFile],
+        blobs: dict[str, str] | None = None,
+    ) -> None:
+        """Define the files of a pull request; `blobs` maps a path to its head content so the
+        blob SHAs in `files` can be fetched with `get_blob`."""
+        self._repos[full_name].pulls[number] = files
+        for text in (blobs or {}).values():
+            self._blobs[blob_sha(text.encode())] = text.encode()
+
+    def comments_on(self, number: int) -> list[str]:
+        return [body for cid, body in self.comments.items() if self.comment_targets[cid] == number]
+
+    def delete_comment(self, comment_id: int) -> None:
+        self.comments.pop(comment_id, None)
 
     def add_commit(self, full_name: str, sha: str, changes: list[ChangedFile]) -> None:
         self._repos[full_name].commits[sha] = changes
@@ -61,3 +84,24 @@ class FakeGitHub:
         self, installation_id: int, full_name: str, sha: str
     ) -> list[ChangedFile]:
         return self._repos[full_name].commits[sha]
+
+    async def get_pull_request_files(
+        self, installation_id: int, full_name: str, number: int
+    ) -> list[ChangedFile]:
+        self.calls.append(f"get_pull_request_files {full_name}#{number}")
+        return self._repos[full_name].pulls[number]
+
+    async def create_comment(
+        self, installation_id: int, full_name: str, number: int, body: str
+    ) -> int:
+        self._next_comment_id += 1
+        self.comments[self._next_comment_id] = body
+        self.comment_targets[self._next_comment_id] = number
+        return self._next_comment_id
+
+    async def update_comment(
+        self, installation_id: int, full_name: str, comment_id: int, body: str
+    ) -> None:
+        if comment_id not in self.comments:
+            raise CommentNotFoundError(str(comment_id))
+        self.comments[comment_id] = body

@@ -27,6 +27,14 @@ extracted statement); `rationale` is `null` (the extractor must not invent one) 
 `{"any": [...]}`; `updates` names the earlier rule an update must reuse; `symbols` and `quote`
 are only used by the offline "oracle" run that checks the fixture itself.
 
+`prs/NN-slug/` holds the five test pull requests applied on top of the final state (spec section 12):
+`pr.json` says whether a warning is expected and which rule must be flagged (`oracle`, also used by
+the offline run), `files/` the head content of the files it changes. Two must warn (implants on
+Saturday mornings, a 12-hour cancellation window); three must stay quiet (an unrelated helper, a
+behaviour-preserving simplification, an extracted constant). Hard negatives must be *truly*
+behaviour-preserving: an earlier lookup-table refactor was flagged by the model because
+`table[key] ?? 30` returns a function for keys like `"constructor"`, which is a real difference.
+
 Run the evaluation with a real model:
 
 ```bash

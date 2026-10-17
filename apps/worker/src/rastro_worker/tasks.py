@@ -5,7 +5,7 @@ from functools import wraps
 
 from githubkit.exception import GitHubException, RequestFailed
 
-from rastro_worker import indexing, resync, rule_extraction
+from rastro_worker import impact, indexing, resync, rule_extraction
 from rastro_worker.app import app
 from rastro_worker.deps import get_deps
 
@@ -75,3 +75,10 @@ async def extract_rules(repository_id: str, sha: str, force: bool = False) -> No
 async def resync_anchors(repository_id: str) -> None:
     """Follow renamed/moved code with the rule anchors; orphan rules whose code is gone."""
     await resync.resync_anchors(get_deps(), uuid.UUID(repository_id))
+
+
+@app.task(name="analyze_pr")
+@log_github_errors
+async def analyze_pr(repository_id: str, number: int, head_sha: str) -> None:
+    """Impact analysis of a pull request; the single PR comment is edited in place."""
+    await impact.analyze_pull_request(get_deps(), uuid.UUID(repository_id), number, head_sha)

@@ -7,11 +7,13 @@ from sqlalchemy import select
 
 from rastro_db import create_engine, create_session_factory
 from rastro_db.models import Repository
-from rastro_llm import ExtractedRule, FakeProvider, RuleExtraction
+from rastro_llm import ExtractedRule, FakeProvider, ImpactAssessment, RuleExtraction
 from rastro_worker.evaluation import (
     FIXTURE_GITHUB_ID_BASE,
+    Report,
     format_report,
     load_fixture,
+    load_pull_requests,
     run_evaluation,
 )
 
@@ -45,14 +47,18 @@ def test_every_expected_entry_is_consistent_with_its_own_session() -> None:
             assert all(key.split("::")[0] in commit.files for key in expected.symbols), expected.id
 
 
-async def evaluate(llm: FakeProvider, *, oracle: bool = False):  # type: ignore[no-untyped-def]
+async def evaluate(
+    llm: FakeProvider, *, oracle: bool = False, impact_oracle: bool = True
+) -> Report:
     engine = create_engine()
     try:
         return await run_evaluation(
             create_session_factory(engine),
             load_fixture(FIXTURE),
             llm=llm,
+            pull_requests=load_pull_requests(FIXTURE),
             oracle=llm if oracle else None,
+            impact_oracle=impact_oracle,
         )
     finally:
         await engine.dispose()
@@ -66,6 +72,14 @@ async def test_oracle_replay_scores_perfectly_through_the_real_pipeline() -> Non
     assert report.success_rate == 1.0 and report.passed
     assert report.false_positive_commits == 0
     assert all(c.status == "analyzed" for c in report.commits)
+    assert [(p.name, p.warned) for p in report.pull_requests] == [
+        ("01-implants-saturday-morning", True),
+        ("02-shorter-cancellation-window", True),
+        ("03-add-date-helper", False),
+        ("04-simplify-duration-lookup", False),
+        ("05-extract-reminder-constant", False),
+    ]
+    assert (report.pr_missed_warnings, report.pr_irrelevant_comments) == (0, 0)
     assert "PASS" in format_report(report)
 
 
@@ -122,3 +136,52 @@ async def test_the_evaluation_leaves_no_data_behind() -> None:
     finally:
         await engine.dispose()
     assert leftovers == []
+
+
+def test_fixture_pull_requests_match_the_spec_requirements() -> None:
+    prs = load_pull_requests(FIXTURE)
+
+    assert len(prs) == 5
+    assert sum(p.expect_warning for p in prs) == 2  # two that must warn, three that must not
+    assert all(p.oracle for p in prs if p.expect_warning)
+
+
+async def test_a_model_that_flags_every_pull_request_fails_the_irrelevant_comment_budget() -> None:
+    alarmist = FakeProvider(
+        responder=lambda prompt, schema: (
+            ImpactAssessment(
+                behavior_changed=True,
+                counterexample="Some input.",
+                risk="breaks",
+                confidence=0.95,
+                explanation="This surely breaks the rule.",
+            )
+            if schema is ImpactAssessment
+            else RuleExtraction(rules=[])
+        )
+    )
+    report = await evaluate(alarmist, oracle=True, impact_oracle=False)
+
+    assert report.pr_irrelevant_comments >= 2 and not report.pr_ok and not report.passed
+    assert "IRRELEVANT COMMENT" in format_report(report)
+
+
+async def test_a_model_that_never_flags_a_pull_request_misses_the_warnings() -> None:
+    quiet = FakeProvider(
+        responder=lambda prompt, schema: (
+            ImpactAssessment(
+                behavior_changed=False,
+                counterexample=None,
+                risk="none",
+                confidence=0.95,
+                explanation="Not affected.",
+            )
+            if schema is ImpactAssessment
+            else RuleExtraction(rules=[])
+        )
+    )
+
+    report = await evaluate(quiet)
+
+    assert report.pr_missed_warnings == 2 and report.pr_irrelevant_comments == 0
+    assert "MISSED" in format_report(report)

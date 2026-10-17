@@ -1,12 +1,22 @@
 import difflib
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import aliased
 
-from rastro_db.models import AgentSession, Commit, Rule, RuleAnchor, Symbol, SymbolCall
+from rastro_db.models import (
+    AgentSession,
+    Commit,
+    PrAnalysis,
+    Rule,
+    RuleAnchor,
+    RuleOrigin,
+    Symbol,
+    SymbolCall,
+)
 from rastro_github import ChangedFile
 from rastro_github.testing import FakeGitHub, blob_sha
 from rastro_llm import FakeProvider
@@ -72,12 +82,21 @@ class WorkerContext:
             return {(path, name): role for path, name, role in rows}
 
     async def add_rule(
-        self, statement: str, anchors: dict[tuple[str, str], str], *, status: str = "active"
+        self,
+        statement: str,
+        anchors: dict[tuple[str, str], str],
+        *,
+        status: str = "active",
+        rationale: str | None = None,
     ) -> uuid.UUID:
         """A rule anchored to existing symbols: {(file, qualified_name): role}."""
         async with self.deps.session_factory() as session, session.begin():
             rule = Rule(
-                repository_id=self.repository_id, statement=statement, confidence=0.9, status=status
+                repository_id=self.repository_id,
+                statement=statement,
+                rationale=rationale,
+                confidence=0.9,
+                status=status,
             )
             session.add(rule)
             await session.flush()
@@ -92,6 +111,13 @@ class WorkerContext:
                 assert symbol_id is not None, f"symbol {path}::{name} is not indexed"
                 session.add(RuleAnchor(rule_id=rule.id, symbol_id=symbol_id, role=role))
             return rule.id
+
+    async def add_origin(self, rule_id: uuid.UUID, sha: str, committed_at: datetime) -> None:
+        async with self.deps.session_factory() as session, session.begin():
+            session.add(
+                Commit(repository_id=self.repository_id, sha=sha, committed_at=committed_at)
+            )
+            session.add(RuleOrigin(rule_id=rule_id, commit_sha=sha))
 
     async def rule_status(self, rule_id: uuid.UUID) -> str:
         async with self.deps.session_factory() as session:
@@ -120,6 +146,33 @@ class WorkerContext:
                     Symbol.qualified_name == name,
                 )
             )
+
+    async def pr_analysis(self, number: int) -> PrAnalysis | None:
+        async with self.deps.session_factory() as session:
+            return await session.scalar(
+                select(PrAnalysis).where(
+                    PrAnalysis.repository_id == self.repository_id, PrAnalysis.pr_number == number
+                )
+            )
+
+    def stage_pull_request(
+        self, number: int, files: dict[str, str], changes: dict[str, str | None]
+    ) -> None:
+        """A pull request whose head has `files`; `changes` maps path -> old content (None = new)."""
+        self.github.add_pull_request(
+            self.full_name,
+            number,
+            [
+                ChangedFile(
+                    path,
+                    "added" if old is None else "modified",
+                    blob_sha=blob_sha(files[path].encode()),
+                    patch=make_patch(old or "", files[path]),
+                )
+                for path, old in changes.items()
+            ],
+            blobs=files,
+        )
 
     async def commit(self, sha: str) -> Commit | None:
         async with self.deps.session_factory() as session:
