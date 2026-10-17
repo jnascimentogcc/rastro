@@ -8,8 +8,8 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "rastro",
     "rastro-api",
-    "rastro-cli",
     "rastro-code-analysis",
     "rastro-db",
     "rastro-github",
@@ -1733,6 +1733,25 @@ wheels = [
 ]
 
 [[package]]
+name = "rastro"
+version = "0.1.0"
+source = { editable = "packages/cli" }
+dependencies = [
+    { name = "httpx" },
+    { name = "keyring" },
+    { name = "rastro-session-parsers" },
+    { name = "typer" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "keyring", specifier = ">=25" },
+    { name = "rastro-session-parsers", editable = "packages/session_parsers" },
+    { name = "typer", specifier = ">=0.12" },
+]
+
+[[package]]
 name = "rastro-api"
 version = "0.0.0"
 source = { editable = "apps/api" }
@@ -1755,25 +1774,6 @@ requires-dist = [
     { name = "rastro-llm", editable = "packages/llm" },
     { name = "rastro-worker", editable = "apps/worker" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
-]
-
-[[package]]
-name = "rastro-cli"
-version = "0.0.0"
-source = { editable = "packages/cli" }
-dependencies = [
-    { name = "httpx" },
-    { name = "keyring" },
-    { name = "rastro-session-parsers" },
-    { name = "typer" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "keyring", specifier = ">=25" },
-    { name = "rastro-session-parsers", editable = "packages/session_parsers" },
-    { name = "typer", specifier = ">=0.12" },
 ]
 
 [[package]]
@@ -1844,7 +1844,7 @@ requires-dist = [
 
 [[package]]
 name = "rastro-session-parsers"
-version = "0.0.0"
+version = "0.1.0"
 source = { editable = "packages/session_parsers" }
 
 [[package]]
