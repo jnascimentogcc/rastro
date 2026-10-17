@@ -36,6 +36,49 @@ The token goes to the system keychain (or `RASTRO_TOKEN` on headless machines), 
 Captures wait in `.rastro/pending/` (git-ignored through `.git/info/exclude`) until the upload succeeds;
 failures are logged to `.rastro/capture.log`.
 
+## Running with Docker
+
+The compose file runs the whole stack: `postgres` (pgvector), a one-shot `migrate` service
+(`alembic upgrade head`, then `python -m rastro_worker.schema`, which applies the Procrastinate schema
+only when it is missing, so re-running is safe), `api` and `worker`. Both images are multi-stage
+uv builds that run as a non-root user.
+
+```bash
+cp .env.example .env          # optional; GitHub App and LLM settings are read from it
+mkdir -p secrets              # put github-app.private-key.pem here (mounted read-only at /secrets)
+docker compose up -d --build --wait
+curl localhost:8000/health    # {"status":"ok"}
+```
+
+`DATABASE_URL` and the private-key path are set by compose itself; everything else comes from `.env`.
+Host ports can be changed with `POSTGRES_PORT` and `API_PORT` (defaults 5432 and 8000). To issue a
+repository token: `docker compose exec api python -m rastro_api.admin issue-token --github-id 1 --full-name owner/repo`.
+After pulling new code run `docker compose up -d --build` again; `migrate` runs before `api` and `worker` restart.
+
+## Releasing the CLI
+
+The CLI is published as the distribution `rastro` (command `rastro`) and depends on
+`rastro-session-parsers`, which must be published first. The version lives in each package's
+`pyproject.toml`; bump both together when the parser API changes, and keep the `rastro-session-parsers`
+range in `packages/cli/pyproject.toml` in sync. The license field is a placeholder
+(`LicenseRef-Proprietary`) to be replaced before the first public release. Note: the name `rastro` is
+already taken on PyPI by another project, so check availability (or pick another distribution name,
+keeping the `rastro` script) before publishing.
+
+```bash
+rm -rf dist
+uv build --package rastro-session-parsers -o dist
+uv build --package rastro -o dist
+# smoke test in a throwaway tool dir, resolving the sibling wheel from dist/
+UV_TOOL_DIR=$(mktemp -d) UV_TOOL_BIN_DIR=$(mktemp -d) uv tool install --find-links dist ./dist/rastro-<version>-py3-none-any.whl
+# publish (maintainers only): parsers first, then the CLI
+uv publish dist/rastro_session_parsers-* && uv publish dist/rastro-*
+```
+
+Users then run `pipx install rastro` or `uvx rastro init`. The git hook calls `rastro` by name, so the
+tool's bin directory must be on the `PATH` git sees (`pipx ensurepath` / `uv tool update-shell`);
+`rastro init` warns when it is not.
+
 ## GitHub App setup (phase 4)
 
 1. **Create the App** at <https://github.com/settings/apps/new>:

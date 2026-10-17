@@ -40,3 +40,8 @@ jobs:
           uv run alembic upgrade head
           uv run alembic check
       - run: uv run pytest
+      - name: Build the CLI wheels and the compose file
+        run: |
+          uv build --package rastro-session-parsers -o dist
+          uv build --package rastro -o dist
+          docker compose config -q
