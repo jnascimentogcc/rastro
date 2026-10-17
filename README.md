@@ -57,25 +57,28 @@ After pulling new code run `docker compose up -d --build` again; `migrate` runs 
 
 ## Releasing the CLI
 
-The CLI is published as the distribution `rastro` (command `rastro`) and depends on
+The CLI is published as the distribution `rastro-cli` (the command is still `rastro`) and depends on
 `rastro-session-parsers`, which must be published first. The version lives in each package's
 `pyproject.toml`; bump both together when the parser API changes, and keep the `rastro-session-parsers`
 range in `packages/cli/pyproject.toml` in sync. The license field is a placeholder
-(`LicenseRef-Proprietary`) to be replaced before the first public release. Note: the name `rastro` is
-already taken on PyPI by another project, so check availability (or pick another distribution name,
-keeping the `rastro` script) before publishing.
+(`LicenseRef-Proprietary`) to be replaced before the first public release. The distribution is called
+`rastro-cli` because `rastro` is already taken on PyPI by another project; `rastro-cli` and
+`rastro-session-parsers` were free when checked (2026-10-17), so confirm they still are right before the
+first upload. The product name is provisional (spec), so renaming later only changes the distribution
+name: keep the `rastro` script or update the hook text in `rastro_cli/hook.py` too.
 
 ```bash
 rm -rf dist
 uv build --package rastro-session-parsers -o dist
-uv build --package rastro -o dist
+uv build --package rastro-cli -o dist
 # smoke test in a throwaway tool dir, resolving the sibling wheel from dist/
-UV_TOOL_DIR=$(mktemp -d) UV_TOOL_BIN_DIR=$(mktemp -d) uv tool install --find-links dist ./dist/rastro-<version>-py3-none-any.whl
+UV_TOOL_DIR=$(mktemp -d) UV_TOOL_BIN_DIR=$(mktemp -d) uv tool install --find-links dist ./dist/rastro_cli-<version>-py3-none-any.whl
 # publish (maintainers only): parsers first, then the CLI
-uv publish dist/rastro_session_parsers-* && uv publish dist/rastro-*
+uv publish dist/rastro_session_parsers-* && uv publish dist/rastro_cli-*
 ```
 
-Users then run `pipx install rastro` or `uvx rastro init`. The git hook calls `rastro` by name, so the
+Users then run `pipx install rastro-cli` or `uvx --from rastro-cli rastro init` (`uvx` needs `--from`
+because the package and the command have different names). The git hook calls `rastro` by name, so the
 tool's bin directory must be on the `PATH` git sees (`pipx ensurepath` / `uv tool update-shell`);
 `rastro init` warns when it is not.
 

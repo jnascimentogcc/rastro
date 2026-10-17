@@ -5,7 +5,7 @@ AI-generated commits from coding-agent sessions (Claude Code) and queries the bu
 extracted from them.
 
 ```bash
-pipx install rastro        # or: uvx rastro init
+pipx install rastro-cli                  # or: uvx --from rastro-cli rastro init
 cd your-repo
 rastro init --api-url https://your-rastro-server
 ```

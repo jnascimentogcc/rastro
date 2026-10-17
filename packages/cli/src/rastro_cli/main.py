@@ -81,7 +81,7 @@ def init(
     if shutil.which("rastro") is None:
         typer.echo(
             "Warning: `rastro` is not on your PATH, so the hook cannot find it. "
-            "Install it with `pipx install rastro` or `uv tool install rastro`.",
+            "Install it with `pipx install rastro-cli` or `uv tool install rastro-cli`.",
             err=True,
         )
 
