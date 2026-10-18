@@ -69,7 +69,10 @@ How to work:
   EXISTING RULES (then set existing_rule_id to its id and write the NEW statement); prefer
   "update" over creating a near-duplicate. An "update" also covers the same logic being copied
   into another symbol (EXISTING RULES lists rules anchored to identical code elsewhere); then
-  put the NEW symbol keys in "symbols". For an update, set rationale only if this change states
+  put the NEW symbol keys in "symbols". EXISTING RULES may also list rules of NEARBY code (the
+  same file, or a direct caller or callee of a changed symbol): if this change states one of them
+  again in new code or new words, update that rule instead of creating a second phrasing of it;
+  if the change is not about it, leave it alone. For an update, set rationale only if this change states
   a new reason, otherwise null (the previous reason is kept); "none" only if you must explain nothing was found
   (then leave symbols empty). If the change contains no business rule, return an empty list.
 - "confidence": 0.0 to 1.0, how sure you are that this is a real business rule implemented by

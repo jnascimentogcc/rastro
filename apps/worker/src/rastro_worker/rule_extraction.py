@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, true, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +24,15 @@ from rastro_code_analysis import (
     symbol_source,
     touched_symbols,
 )
-from rastro_db.models import AgentSession, Commit, Repository, Rule, RuleAnchor, RuleOrigin
+from rastro_db.models import (
+    AgentSession,
+    Commit,
+    Repository,
+    Rule,
+    RuleAnchor,
+    RuleOrigin,
+    SymbolCall,
+)
 from rastro_db.models import Symbol as SymbolRow
 from rastro_github import ChangedFile
 from rastro_llm import (
@@ -49,6 +57,8 @@ logger = logging.getLogger(__name__)
 MIN_CONFIDENCE = 0.5
 DUPLICATE_SIMILARITY = 0.92
 DUPLICATE_MIN_LINES = 3
+NEARBY_RULES_LIMIT = 6  # rules of neighbouring code offered to the model besides the direct ones
+NEARBY_UPDATE_MIN_SIMILARITY = 0.6  # an "update" of a nearby rule must still resemble it
 SYMBOL_EMBEDDING_CHARS = 2_000
 ATTEMPTS = 2
 _NOISE_FILES = re.compile(r"(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|\.min\.(js|css)|\.map)$")
@@ -194,7 +204,7 @@ async def extract_rules(
 
     async with deps.session_factory() as session, session.begin():
         ids = await ensure_symbols(session, repository_id, sha, analyses)
-        existing = await _existing_rules(session, repository_id, ids, touched)
+        existing, nearby = await _existing_rules(session, repository_id, ids, touched)
 
     context = ExtractionContext(
         commit_message=(commit.message if commit and commit.message else ""),
@@ -222,7 +232,17 @@ async def extract_rules(
         # Embeddings are requested before anything is written, so a quota error here leaves the
         # database untouched.
         summary = await _apply(
-            deps, llm, repository_id, sha, sessions, extraction, ids, touched, sources, existing
+            deps,
+            llm,
+            repository_id,
+            sha,
+            sessions,
+            extraction,
+            ids,
+            touched,
+            sources,
+            existing,
+            nearby,
         )
     except LLMQuotaError as error:
         logger.error(
@@ -286,10 +306,16 @@ async def _existing_rules(
     repository_id: uuid.UUID,
     ids: dict[tuple[str, str], uuid.UUID],
     touched: dict[str, list[Symbol]],
-) -> list[PromptRule]:
+) -> tuple[list[PromptRule], set[str]]:
     """Active rules the change may be touching: anchored to a changed symbol, or anchored to a
     symbol with identical normalized code elsewhere (the copy-paste case: the agent duplicates
-    existing logic, so the model should update that rule instead of inventing a new one)."""
+    existing logic, so the model should update that rule instead of inventing a new one).
+
+    A few rules of NEARBY code follow (same file, or a direct caller/callee of a changed symbol).
+    Without them, a rule that a later commit restates in code it did not anchor to (the handler
+    that calls the validator, the constant that feeds it) is invisible to the model, which then
+    creates a second phrasing of the same rule. Their ids are returned separately because an
+    "update" of one of them gets an extra check in `_apply`."""
     touched_ids = {
         ids[(path, s.qualified_name)]: _key(path, s.qualified_name)
         for path, symbols in touched.items()
@@ -297,7 +323,7 @@ async def _existing_rules(
         if (path, s.qualified_name) in ids
     }
     if not touched_ids:
-        return []
+        return [], set()
     hashes = {s.body_hash for symbols in touched.values() for s in symbols if s.kind != "class"}
     anchored = SymbolRow.id.in_(touched_ids)
     same_code = and_(
@@ -321,10 +347,47 @@ async def _existing_rules(
     for rule, symbol_id, path, name in rows:
         keys = grouped.setdefault(rule.id, (rule, []))[1]
         keys.append(touched_ids.get(symbol_id) or _key(path, name))
-    return [
+    nearby = await _nearby_rules(session, repository_id, set(touched_ids), set(touched), grouped)
+    rules = [
         PromptRule(str(rule.id), rule.statement, rule.rationale, tuple(keys))
-        for rule, keys in grouped.values()
+        for rule, keys in [*grouped.values(), *nearby.values()]
     ]
+    return rules, {str(rule_id) for rule_id in nearby}
+
+
+async def _nearby_rules(
+    session: AsyncSession,
+    repository_id: uuid.UUID,
+    touched_ids: set[uuid.UUID],
+    touched_files: set[str],
+    direct: dict[uuid.UUID, tuple[Rule, list[str]]],
+) -> dict[uuid.UUID, tuple[Rule, list[str]]]:
+    callers = select(SymbolCall.caller_id).where(SymbolCall.callee_id.in_(touched_ids))
+    callees = select(SymbolCall.callee_id).where(SymbolCall.caller_id.in_(touched_ids))
+    rows = await session.execute(
+        select(Rule, SymbolRow.file_path, SymbolRow.qualified_name)
+        .join(RuleAnchor, RuleAnchor.rule_id == Rule.id)
+        .join(SymbolRow, SymbolRow.id == RuleAnchor.symbol_id)
+        .where(
+            Rule.repository_id == repository_id,
+            Rule.status == "active",
+            Rule.id.not_in(list(direct)) if direct else true(),
+            SymbolRow.repository_id == repository_id,
+            SymbolRow.status == "active",
+            or_(
+                SymbolRow.file_path.in_(touched_files),
+                SymbolRow.id.in_(callers),
+                SymbolRow.id.in_(callees),
+            ),
+        )
+        .order_by(Rule.updated_at.desc())
+    )
+    grouped: dict[uuid.UUID, tuple[Rule, list[str]]] = {}
+    for rule, path, name in rows:
+        if rule.id not in grouped and len(grouped) >= NEARBY_RULES_LIMIT:
+            continue
+        grouped.setdefault(rule.id, (rule, []))[1].append(_key(path, name))
+    return grouped
 
 
 def _prompt_excerpts(sessions: list[AgentSession]) -> list[PromptExcerpt]:
@@ -441,6 +504,7 @@ async def _apply(
     touched: dict[str, list[Symbol]],
     sources: dict[str, str],
     existing: list[PromptRule],
+    nearby: set[str] | None = None,
 ) -> ExtractionSummary:
     key_to_symbol: dict[str, tuple[str, Symbol]] = {
         _key(path, s.qualified_name): (path, s)
@@ -454,6 +518,7 @@ async def _apply(
 
     metadata = {"repository_id": str(repository_id), "sha": sha}
     statement_vectors = await llm.embed([a.rule.statement for a in accepted], metadata=metadata)
+    await _reject_unrelated_updates(deps, accepted, statement_vectors, nearby or set())
     anchored_keys = sorted({k for a in accepted for k in a.symbols})
     symbol_vectors = dict(
         zip(
@@ -513,6 +578,40 @@ async def _apply(
                 ],
             )
     return summary
+
+
+async def _reject_unrelated_updates(
+    deps: WorkerDeps,
+    accepted: list[_Accepted],
+    vectors: list[list[float]],
+    nearby: set[str],
+) -> None:
+    """The model may update a rule of nearby code only if the new statement still resembles it.
+
+    Direct rules are anchored to what the commit changed, so an update there is expected to be
+    free-form. A nearby rule is only offered so that a restated rule is not duplicated; if the
+    "update" is about something else entirely, it is really a new rule, and overwriting the nearby
+    one would destroy it.
+    """
+    pending = [
+        (item, vector)
+        for item, vector in zip(accepted, vectors, strict=True)
+        if item.existing_id is not None and str(item.existing_id) in nearby
+    ]
+    if not pending:
+        return
+    async with deps.session_factory() as session:
+        for item, vector in pending:
+            distance = await session.scalar(
+                select(Rule.embedding.cosine_distance(vector)).where(Rule.id == item.existing_id)
+            )
+            if distance is not None and 1 - float(distance) < NEARBY_UPDATE_MIN_SIMILARITY:
+                logger.info(
+                    "update of nearby rule %s is unrelated to it (similarity %.2f): stored as new",
+                    item.existing_id,
+                    1 - float(distance),
+                )
+                item.existing_id = None
 
 
 async def _store_rule(
