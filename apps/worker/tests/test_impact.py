@@ -388,3 +388,114 @@ async def test_changing_a_module_constant_reaches_the_rules_of_the_functions_tha
     prompt = worker.llm.calls[0].prompt
     assert "+const MIN_NOTICE_MS = 12 * 60 * 60 * 1000;" in prompt
     assert "src/agenda.ts::validateBooking" in prompt  # the function the constant feeds
+
+
+HANDLER = "export function handle(d: number) {\n  return validateBooking(d, 9, 'x');\n}\n"
+SERVER = "src/server.ts"
+
+
+def unit_vector(*leading: float) -> list[float]:
+    return [*leading, *([0.0] * (1024 - len(leading)))]
+
+
+async def test_another_primary_anchor_is_not_presented_as_an_unchanged_copy(
+    worker: WorkerContext,
+) -> None:
+    """A rule anchored to a validator and to its handler has no 'copy': they are different code."""
+    worker.github.set_tree(
+        worker.full_name, SHA1, {AGENDA: AGENDA_V1, SERVER: HANDLER}, head_of="main"
+    )
+    await index_repository(worker.deps, worker.repository_id)
+    await worker.add_rule(
+        "Implants cannot be booked on Friday afternoon",
+        {(AGENDA, "validateBooking"): "primary", (SERVER, "handle"): "primary"},
+        rationale="Dr. Mendes needs 48h of follow-up",
+    )
+    worker.stage_pull_request(PR, {AGENDA: AGENDA_SATURDAY}, {AGENDA: AGENDA_V1})
+    worker.llm.queue(verdict("inconsistent_duplicate", 0.9, "The handler disagrees."))
+
+    await run(worker)
+
+    assert "src/server.ts::handle" not in worker.llm.calls[0].prompt
+    analysis = await worker.pr_analysis(PR)
+    assert analysis is not None and analysis.findings[0]["risk"] == "changes"  # downgraded
+    [body] = worker.github.comments_on(PR)
+    assert "the same logic exists" not in body
+
+
+async def test_changing_a_copy_names_the_untouched_original(worker: WorkerContext) -> None:
+    await seeded(worker)
+    changed_copy = CALENDAR_V1.replace(
+        "day === 5 && hour >= 12", "(day === 5 && hour >= 12) || day === 6"
+    )
+    worker.stage_pull_request(PR, {CALENDAR: changed_copy}, {CALENDAR: CALENDAR_V1})
+    worker.llm.queue(verdict("inconsistent_duplicate", 0.9, "The original disagrees."))
+
+    await run(worker)
+
+    assert "src/agenda.ts::validateBooking" in worker.llm.calls[0].prompt
+    [body] = worker.github.comments_on(PR)
+    assert "the same logic exists in `src/agenda.ts` and was not changed" in body
+
+
+async def test_two_phrasings_of_one_rule_become_a_single_candidate_with_the_rationale(
+    worker: WorkerContext,
+) -> None:
+    worker.github.set_tree(worker.full_name, SHA1, {AGENDA: AGENDA_V1}, head_of="main")
+    await index_repository(worker.deps, worker.repository_id)
+    anchors = {(AGENDA, "validateBooking"): "primary"}
+    bare = await worker.add_rule(
+        "No implant bookings on Friday afternoons",
+        anchors,
+        confidence=0.95,
+        embedding=unit_vector(1.0, 0.02),
+    )
+    explained = await worker.add_rule(
+        "Implants cannot be booked on Friday afternoon",
+        anchors,
+        rationale="Dr. Mendes needs 48h of follow-up",
+        confidence=0.7,
+        embedding=unit_vector(1.0, 0.0),
+    )
+    worker.stage_pull_request(PR, {AGENDA: AGENDA_SATURDAY}, {AGENDA: AGENDA_V1})
+    worker.llm.queue(verdict("changes", 0.9, "This change enables Saturday bookings."))
+
+    result = await run(worker)
+
+    assert (result.candidates, result.assessed, result.reported) == (1, 1, 1)
+    [body] = worker.github.comments_on(PR)
+    assert "Why: Dr. Mendes needs 48h of follow-up" in body  # the phrasing with the reason wins
+    analysis = await worker.pr_analysis(PR)
+    assert analysis is not None
+    assert analysis.findings[0]["rule_id"] == str(explained)
+    assert analysis.findings[0]["merged_rule_ids"] == [str(bare)]
+
+
+async def test_different_rules_on_the_same_code_are_not_merged(worker: WorkerContext) -> None:
+    worker.github.set_tree(worker.full_name, SHA1, {AGENDA: AGENDA_V1}, head_of="main")
+    await index_repository(worker.deps, worker.repository_id)
+    anchors = {(AGENDA, "validateBooking"): "primary"}
+    await worker.add_rule("Friday rule", anchors, embedding=unit_vector(1.0, 0.0))
+    await worker.add_rule("Saturday rule", anchors, embedding=unit_vector(0.0, 1.0))
+    worker.stage_pull_request(PR, {AGENDA: AGENDA_SATURDAY}, {AGENDA: AGENDA_V1})
+    worker.llm.queue(verdict("none"))
+    worker.llm.queue(verdict("none"))
+
+    result = await run(worker)
+
+    assert result.candidates == 2
+
+
+async def test_rules_without_embeddings_are_never_merged(worker: WorkerContext) -> None:
+    worker.github.set_tree(worker.full_name, SHA1, {AGENDA: AGENDA_V1}, head_of="main")
+    await index_repository(worker.deps, worker.repository_id)
+    anchors = {(AGENDA, "validateBooking"): "primary"}
+    await worker.add_rule("One phrasing", anchors)
+    await worker.add_rule("Another phrasing", anchors)
+    worker.stage_pull_request(PR, {AGENDA: AGENDA_SATURDAY}, {AGENDA: AGENDA_V1})
+    worker.llm.queue(verdict("none"))
+    worker.llm.queue(verdict("none"))
+
+    result = await run(worker)
+
+    assert result.candidates == 2

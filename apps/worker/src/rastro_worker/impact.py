@@ -78,6 +78,11 @@ class _Candidate:
     unchanged_duplicates: list[str] = field(
         default_factory=list
     )  # "path::name" of untouched copies
+    merged_rule_ids: list[str] = field(default_factory=list)  # near-identical rules folded in
+
+
+# Cosine similarity of two rule statements above which they are treated as one rule.
+RULE_MERGE_SIMILARITY = 0.9
 
 
 def _key(path: str, name: str) -> str:
@@ -250,7 +255,7 @@ async def _candidate_rules(
         for rule_id, (rule, anchors) in related.items()
         if rule_id not in direct
     ]
-    return candidates[:limit]  # direct ones come first
+    return _merge_near_duplicates(candidates)[:limit]  # direct ones come first
 
 
 async def _rules_anchored_to(
@@ -278,17 +283,82 @@ async def _rules_anchored_to(
 async def _unchanged_copies(
     session: AsyncSession, rule_id: uuid.UUID, changed_ids: set[uuid.UUID]
 ) -> list[str]:
-    """Active anchored symbols of the rule that this pull request does not touch."""
-    rows = await session.execute(
-        select(SymbolRow.file_path, SymbolRow.qualified_name)
-        .join(RuleAnchor, RuleAnchor.symbol_id == SymbolRow.id)
-        .where(
-            RuleAnchor.rule_id == rule_id,
-            SymbolRow.status == "active",
-            SymbolRow.id.not_in(changed_ids),
+    """Other implementations of the same logic that this pull request does not touch.
+
+    Anchors have a role: `primary` is where the rule lives, `duplicate` is a copy of that code.
+    A rule can also be anchored to several primary symbols that are different code (a validator
+    and the handler that calls it); those are not copies and must not be presented as such. So:
+    when the change touches a copy, every other anchor is the logic it should agree with; when it
+    touches a primary symbol, only the untouched copies count.
+    """
+    rows = (
+        await session.execute(
+            select(SymbolRow.id, SymbolRow.file_path, SymbolRow.qualified_name, RuleAnchor.role)
+            .join(RuleAnchor, RuleAnchor.symbol_id == SymbolRow.id)
+            .where(RuleAnchor.rule_id == rule_id, SymbolRow.status == "active")
         )
+    ).all()
+    touches_a_copy = any(role == "duplicate" for sid, _, _, role in rows if sid in changed_ids)
+    return sorted(
+        _key(path, name)
+        for sid, path, name, role in rows
+        if sid not in changed_ids and (touches_a_copy or role == "duplicate")
     )
-    return sorted(_key(path, name) for path, name in rows)
+
+
+def _cosine(a: Any, b: Any) -> float:
+    x, y = [float(v) for v in a], [float(v) for v in b]
+    dot = sum(p * q for p, q in zip(x, y, strict=True))
+    norm = (sum(p * p for p in x) * sum(q * q for q in y)) ** 0.5
+    return dot / norm if norm else 0.0
+
+
+def _merge_near_duplicates(candidates: list[_Candidate]) -> list[_Candidate]:
+    """Fold rules that say the same thing about the same code into the best formulation.
+
+    Extraction can store one rule in several phrasings. Assessing and quoting all of them wastes
+    model calls and, worse, a warning may quote a phrasing that has no rationale while another
+    one has it. Candidates are merged only when they have the same relation, share a file and
+    their statements are near-identical in embedding space; the kept one is the one that has a
+    rationale, then the most confident.
+    """
+    best_first = sorted(
+        range(len(candidates)),
+        key=lambda i: (
+            candidates[i].rule.rationale is not None,
+            candidates[i].rule.confidence,
+            -i,
+        ),
+        reverse=True,
+    )
+    kept: list[int] = []
+    for index in best_first:
+        candidate = candidates[index]
+        host = next((k for k in kept if _same_rule(candidates[k], candidate)), None)
+        if host is None:
+            kept.append(index)
+            continue
+        winner = candidates[host]
+        winner.merged_rule_ids.append(str(candidate.rule.id))
+        winner.touched_keys += [k for k in candidate.touched_keys if k not in winner.touched_keys]
+        winner.unchanged_duplicates += [
+            k for k in candidate.unchanged_duplicates if k not in winner.unchanged_duplicates
+        ]
+        logger.info(
+            "rule %s folded into %s (same rule, different wording)",
+            candidate.rule.id,
+            winner.rule.id,
+        )
+    return [candidates[i] for i in sorted(kept)]
+
+
+def _same_rule(a: _Candidate, b: _Candidate) -> bool:
+    if a.relation != b.relation or a.rule.embedding is None or b.rule.embedding is None:
+        return False
+    files_a = {k.partition("::")[0] for k in a.touched_keys}
+    if not files_a & {k.partition("::")[0] for k in b.touched_keys}:
+        return False
+    return _cosine(a.rule.embedding, b.rule.embedding) >= RULE_MERGE_SIMILARITY
 
 
 async def _neighbors(session: AsyncSession, start: set[uuid.UUID]) -> set[uuid.UUID]:
@@ -480,6 +550,7 @@ async def _publish(
             "explanation": a.explanation,
             "counterexample": a.counterexample,
             "reported": (c, relation, a) in reported,
+            "merged_rule_ids": c.merged_rule_ids,
         }
         for c, relation, a in assessments
     ]
