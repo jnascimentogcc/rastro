@@ -88,6 +88,8 @@ class WorkerContext:
         *,
         status: str = "active",
         rationale: str | None = None,
+        confidence: float = 0.9,
+        embedding: list[float] | None = None,
     ) -> uuid.UUID:
         """A rule anchored to existing symbols: {(file, qualified_name): role}."""
         async with self.deps.session_factory() as session, session.begin():
@@ -95,8 +97,9 @@ class WorkerContext:
                 repository_id=self.repository_id,
                 statement=statement,
                 rationale=rationale,
-                confidence=0.9,
+                confidence=confidence,
                 status=status,
+                embedding=embedding,
             )
             session.add(rule)
             await session.flush()
