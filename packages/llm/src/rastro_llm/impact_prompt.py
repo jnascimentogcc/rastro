@@ -42,6 +42,12 @@ Then answer with one risk:
 - "none": the rule is not affected. This includes refactors, renames, formatting, comments,
   logging, tests, new unrelated code and any change that keeps the behaviour the same.
 
+When the rule has relation "duplicate", the pull request did not touch the code the rule is
+anchored to: it ADDS or changes code that looks like a copy of it (the originals are under
+UNCHANGED COPIES). Decide whether this new code implements the same rule. If it does, with other
+behaviour than the rule states, use "inconsistent_duplicate"; if it only looks similar but is about
+something else, answer "none".
+
 Be conservative: a false alarm costs more than a missed one. If the code you are shown does not
 clearly change what the rule states, answer "none". Base your answer only on the rule, the code
 and the diff below. In "explanation" say in one or two sentences what in the change affects the

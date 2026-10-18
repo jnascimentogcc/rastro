@@ -4,7 +4,8 @@ from datetime import UTC, datetime
 from procrastinate import testing
 from worker_support import WorkerContext
 
-from rastro_llm import ImpactAssessment, LLMError
+from rastro_code_analysis import analyze_source, symbol_source
+from rastro_llm import ImpactAssessment, LLMError, hashing_embedding
 from rastro_worker import tasks
 from rastro_worker.app import app
 from rastro_worker.comment import MARKER
@@ -499,3 +500,129 @@ async def test_rules_without_embeddings_are_never_merged(worker: WorkerContext) 
     result = await run(worker)
 
     assert result.candidates == 2
+
+
+CANCELLATION = (
+    "const PREPAY_AFTER = 3;\n"
+    "export function requiresPrepayment(noShows: number): boolean {\n"
+    "  return noShows >= PREPAY_AFTER;\n"
+    "}\n"
+)
+ROUTES = (
+    "import { requiresPrepayment } from './cancellation';\n"
+    "export function buildServer() {\n"
+    "  return { book: (noShows: number) => requiresPrepayment(noShows) };\n"
+    "}\n"
+)
+
+
+async def test_p5_a_constant_reaches_a_rule_anchored_only_to_the_caller(
+    worker: WorkerContext,
+) -> None:
+    """Report P5: the threshold lives in cancellation.ts, the rule is anchored to the server."""
+    worker.github.set_tree(
+        worker.full_name,
+        SHA1,
+        {"src/cancellation.ts": CANCELLATION, SERVER: ROUTES},
+        head_of="main",
+    )
+    await index_repository(worker.deps, worker.repository_id)
+    await worker.add_rule(
+        "Three no-shows in a row require prepayment",
+        {(SERVER, "buildServer"): "primary"},
+        rationale="The professional is left idle without being paid",
+    )
+    worker.stage_pull_request(
+        PR,
+        {"src/cancellation.ts": CANCELLATION.replace("= 3", "= 2")},
+        {"src/cancellation.ts": CANCELLATION},
+    )
+    worker.llm.queue(verdict("changes", 0.9, "Prepayment now starts after two no-shows."))
+
+    result = await run(worker)
+
+    assert (result.candidates, result.reported) == (1, 1)
+    assert '<rule relation="related">' in worker.llm.calls[0].prompt
+
+
+COMMISSION = (
+    "export function commission(price: number, discount: number): number {\n"
+    "  const base = price - discount;\n"
+    "  return Math.round(base * 0.4);\n"
+    "}\n"
+)
+REPORTS = (
+    "export function commissionForReport(price: number, discount: number): number {\n"
+    "  const base = price;\n"
+    "  return Math.round(base * 0.4);\n"
+    "}\n"
+)
+
+
+async def test_p4_a_modified_copy_in_a_new_file_reaches_the_rule_it_contradicts(
+    worker: WorkerContext,
+) -> None:
+    """Report P4: reports.ts copies the commission code but computes it before the discount."""
+    worker.github.set_tree(
+        worker.full_name, SHA1, {"src/commission.ts": COMMISSION}, head_of="main"
+    )
+    await index_repository(worker.deps, worker.repository_id)
+    rule_id = await worker.add_rule(
+        "Commission is calculated on the value after the discount",
+        {("src/commission.ts", "commission"): "primary"},
+        rationale="The salon must not pay commission on a discount it granted",
+    )
+    [probe] = analyze_source(REPORTS, "src/reports.ts").symbols
+    await worker.set_embedding(
+        "src/commission.ts",
+        "commission",
+        hashing_embedding(symbol_source(REPORTS, probe)[:2_000], 1024),  # "near-identical" code
+    )
+    worker.stage_pull_request(PR, {"src/reports.ts": REPORTS}, {"src/reports.ts": None})
+    worker.llm.queue(verdict("inconsistent_duplicate", 0.9, "The copy ignores the discount."))
+
+    result = await run(worker)
+
+    assert (result.candidates, result.reported) == (1, 1)
+    prompt = worker.llm.calls[0].prompt
+    assert '<rule relation="duplicate">' in prompt
+    assert "src/reports.ts::commissionForReport" in prompt
+    assert "src/commission.ts::commission" in prompt  # the original, listed as the unchanged copy
+    analysis = await worker.pr_analysis(PR)
+    assert analysis is not None and analysis.findings[0]["rule_id"] == str(rule_id)
+
+
+async def seed_commission_rule(worker: WorkerContext, vector: list[float] | None) -> None:
+    worker.github.set_tree(
+        worker.full_name, SHA1, {"src/commission.ts": COMMISSION}, head_of="main"
+    )
+    await index_repository(worker.deps, worker.repository_id)
+    await worker.add_rule(
+        "Commission is calculated on the value after the discount",
+        {("src/commission.ts", "commission"): "primary"},
+    )
+    if vector is not None:
+        await worker.set_embedding("src/commission.ts", "commission", vector)
+    worker.stage_pull_request(PR, {"src/reports.ts": REPORTS}, {"src/reports.ts": None})
+
+
+async def test_new_code_that_is_not_similar_to_a_rule_is_not_a_candidate(
+    worker: WorkerContext,
+) -> None:
+    await seed_commission_rule(worker, unit_vector(1.0))
+
+    result = await run(worker)
+
+    assert (result.candidates, result.assessed) == (0, 0)
+    assert len(worker.llm.embedded) == 1  # the new symbol was compared, and nothing matched
+
+
+async def test_no_embedding_call_when_no_rule_is_anchored_to_an_embedded_symbol(
+    worker: WorkerContext,
+) -> None:
+    await seed_commission_rule(worker, None)
+
+    result = await run(worker)
+
+    assert result.candidates == 0
+    assert worker.llm.embedded == []  # nothing to compare with: no cost

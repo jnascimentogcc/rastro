@@ -12,7 +12,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 from sqlalchemy import or_, select
@@ -73,7 +73,7 @@ class ImpactResult:
 @dataclass
 class _Candidate:
     rule: Rule
-    relation: str  # direct | related
+    relation: str  # direct | related | duplicate (new code that looks like the rule's code)
     touched_keys: list[str] = field(default_factory=list)  # the rule's symbols the PR touches
     unchanged_duplicates: list[str] = field(
         default_factory=list
@@ -83,6 +83,12 @@ class _Candidate:
 
 # Cosine similarity of two rule statements above which they are treated as one rule.
 RULE_MERGE_SIMILARITY = 0.9
+# Cosine similarity of a symbol the PR adds or changes to a symbol anchored to a rule, above which
+# the new code is treated as a possible (modified) copy of the rule's implementation.
+COPY_SIMILARITY = 0.9
+COPY_MIN_LINES = 3
+MAX_COPY_PROBES = 8
+SYMBOL_EMBEDDING_CHARS = 2_000
 
 
 def _key(path: str, name: str) -> str:
@@ -116,6 +122,8 @@ async def analyze_pull_request(
         candidates = await _candidate_rules(
             session, repository_id, direct_ids, key_by_id, deps.impact.impact_max_candidates
         )
+        copies = await _copy_candidates(session, llm, repository_id, number, head, candidates)
+    candidates = (candidates + copies)[: deps.impact.impact_max_candidates]
 
     result = ImpactResult("analyzed", candidates=len(candidates))
     try:
@@ -256,6 +264,89 @@ async def _candidate_rules(
         if rule_id not in direct
     ]
     return _merge_near_duplicates(candidates)[:limit]  # direct ones come first
+
+
+async def _copy_candidates(
+    session: AsyncSession,
+    llm: LLMProvider,
+    repository_id: uuid.UUID,
+    number: int,
+    head: _Head,
+    found: list[_Candidate],
+) -> list[_Candidate]:
+    """Rules whose implementation the pull request seems to copy into code that has no anchor.
+
+    A rule only reaches the model through code it is anchored to or that calls it. New code that
+    re-implements the rule elsewhere (often with a different formula, so the hash differs) is
+    neither, so a contradicting copy slipped through. Symbols the PR adds or changes are embedded
+    and compared with the symbols anchored to active rules (those carry embeddings from
+    extraction). Failures here only mean no extra candidates: the rest of the analysis stands.
+    """
+    already_flagged = {k for c in found if c.relation == "direct" for k in c.touched_keys}
+    probes = [
+        (path, symbol)
+        for path, symbols in head.touched.items()
+        for symbol in symbols
+        if symbol.kind != "class"
+        and symbol.end_line - symbol.start_line + 1 >= COPY_MIN_LINES
+        and _key(path, symbol.qualified_name) not in already_flagged
+    ][:MAX_COPY_PROBES]
+    if not probes:
+        return []
+    has_anchors = await session.scalar(
+        select(SymbolRow.id)
+        .join(RuleAnchor, RuleAnchor.symbol_id == SymbolRow.id)
+        .where(SymbolRow.repository_id == repository_id, SymbolRow.embedding.is_not(None))
+        .limit(1)
+    )
+    if has_anchors is None:
+        return []  # no rule is anchored to a symbol with an embedding: nothing to compare with
+    try:
+        vectors = await llm.embed(
+            [
+                symbol_source(head.sources[path], symbol)[:SYMBOL_EMBEDDING_CHARS]
+                for path, symbol in probes
+            ],
+            metadata={"repository_id": str(repository_id), "pull_request": number},
+        )
+    except LLMError as error:
+        logger.warning("copy detection skipped for PR #%d: %s", number, error)
+        return []
+
+    taken = {c.rule.id for c in found}
+    matches: dict[uuid.UUID, tuple[float, Rule, str]] = {}
+    for (path, symbol), vector in zip(probes, vectors, strict=True):
+        distance = SymbolRow.embedding.cosine_distance(vector)
+        rows = await session.execute(
+            select(Rule, distance)
+            .join(RuleAnchor, RuleAnchor.rule_id == Rule.id)
+            .join(SymbolRow, SymbolRow.id == RuleAnchor.symbol_id)
+            .where(
+                Rule.repository_id == repository_id,
+                Rule.status == "active",
+                SymbolRow.status == "active",
+                SymbolRow.embedding.is_not(None),
+                distance <= 1 - COPY_SIMILARITY,
+            )
+        )
+        for rule, dist in rows:
+            if rule.id not in taken and (rule.id not in matches or dist < matches[rule.id][0]):
+                matches[rule.id] = (float(dist), rule, _key(path, symbol.qualified_name))
+
+    candidates: list[_Candidate] = []
+    for _, rule, probe_key in sorted(matches.values(), key=lambda m: m[0]):
+        originals = await _anchored_keys(session, rule.id)
+        candidates.append(_Candidate(rule, "duplicate", [probe_key], originals))
+    return candidates
+
+
+async def _anchored_keys(session: AsyncSession, rule_id: uuid.UUID) -> list[str]:
+    rows = await session.execute(
+        select(SymbolRow.file_path, SymbolRow.qualified_name)
+        .join(RuleAnchor, RuleAnchor.symbol_id == SymbolRow.id)
+        .where(RuleAnchor.rule_id == rule_id, SymbolRow.status == "active")
+    )
+    return sorted(_key(path, name) for path, name in rows)
 
 
 async def _rules_anchored_to(
@@ -455,6 +546,12 @@ def _sanitize(assessment: ImpactAssessment) -> ImpactAssessment:
     )
 
 
+def _prompt_relation(relation: str) -> Literal["direct", "related", "duplicate"]:
+    return (
+        "direct" if relation == "direct" else "duplicate" if relation == "duplicate" else "related"
+    )
+
+
 def _context(candidate: _Candidate, files: list[ChangedFile], head: _Head) -> ImpactContext:
     touched_keys = set(candidate.touched_keys)
     anchored: list[PromptSymbol] = []
@@ -469,7 +566,7 @@ def _context(candidate: _Candidate, files: list[ChangedFile], head: _Head) -> Im
             ),
             None,
         )
-        if candidate.relation == "direct" and symbol is not None:
+        if candidate.relation in ("direct", "duplicate") and symbol is not None:
             anchored.append(
                 PromptSymbol(key, symbol.kind, symbol_source(head.sources[path], symbol))
             )
@@ -500,7 +597,7 @@ def _context(candidate: _Candidate, files: list[ChangedFile], head: _Head) -> Im
     return ImpactContext(
         statement=candidate.rule.statement,
         rationale=candidate.rule.rationale,
-        relation="direct" if candidate.relation == "direct" else "related",
+        relation=_prompt_relation(candidate.relation),
         anchored_symbols=anchored,
         changed_symbols=changed,
         diffs=[PromptFileDiff(c.path, c.patch or "") for c in ordered],
