@@ -622,3 +622,99 @@ async def test_an_unknown_branch_does_not_defer_extraction(worker: WorkerContext
     worker.llm.queue(RuleExtraction(rules=[rule()]))
 
     assert (await extract_rules(worker.deps, worker.repository_id, SHA2)).status == "analyzed"
+
+
+WITH_LUNCH = AFTER.replace(
+    "    return true;\n  }\n}\n",
+    "    return true;\n  }\n\n  lunchBreak(hour: number): boolean {\n    return hour === 13;\n  }\n}\n",
+)
+LUNCH_KEY = f"{AGENDA}::AgendaService.lunchBreak"
+
+
+async def seed_friday_rule(worker: WorkerContext):  # type: ignore[no-untyped-def]
+    await stage_friday_commit(worker)
+    worker.llm.queue(RuleExtraction(rules=[rule()]))
+    await extract_rules(worker.deps, worker.repository_id, SHA2)
+    [first] = await worker.rules()
+    worker.stage_commit(SHA3, {AGENDA: WITH_LUNCH}, {AGENDA: AFTER})
+    await worker.add_commit_row(SHA3)
+    await worker.add_session(SHA3, [user_excerpt("Implants also cannot be booked at lunchtime")])
+    return first
+
+
+async def test_a_rule_of_nearby_code_is_offered_and_updated_instead_of_duplicated(
+    worker: WorkerContext,
+) -> None:
+    first = await seed_friday_rule(worker)
+    worker.llm.queue(
+        RuleExtraction(
+            rules=[
+                rule(
+                    action="update",
+                    existing_rule_id=str(first.id),
+                    statement="Implants cannot be booked on Friday afternoon or at lunchtime",
+                    rationale=None,
+                    origin_quote=None,
+                    symbols=[LUNCH_KEY],
+                )
+            ]
+        )
+    )
+
+    summary = await extract_rules(worker.deps, worker.repository_id, SHA3)
+
+    assert (
+        f'<rule id="{first.id}"' in worker.llm.calls[1].prompt
+    )  # not anchored to a changed symbol
+    assert (summary.created, summary.updated) == (0, 1)
+    [only] = await worker.rules()
+    assert only.id == first.id and only.statement.endswith("at lunchtime")
+    assert set(await worker.anchors(only.id)) == {
+        (AGENDA, "AgendaService.validate"),
+        (AGENDA, "AgendaService.lunchBreak"),
+    }
+
+
+async def test_an_update_of_a_nearby_rule_about_something_else_is_stored_as_a_new_rule(
+    worker: WorkerContext,
+) -> None:
+    first = await seed_friday_rule(worker)
+    worker.llm.queue(
+        RuleExtraction(
+            rules=[
+                rule(
+                    action="update",
+                    existing_rule_id=str(first.id),
+                    statement="Gift vouchers expire twelve months after purchase",
+                    rationale=None,
+                    origin_quote=None,
+                    symbols=[LUNCH_KEY],
+                )
+            ]
+        )
+    )
+
+    summary = await extract_rules(worker.deps, worker.repository_id, SHA3)
+
+    assert (summary.created, summary.updated) == (1, 0)
+    statements = sorted(r.statement for r in await worker.rules())
+    assert statements == [
+        "Gift vouchers expire twelve months after purchase",
+        "Implants cannot be booked on Friday afternoon",  # the nearby rule is untouched
+    ]
+
+
+async def test_rules_of_other_files_are_not_offered(worker: WorkerContext) -> None:
+    await stage_friday_commit(worker)
+    worker.llm.queue(RuleExtraction(rules=[rule()]))
+    await extract_rules(worker.deps, worker.repository_id, SHA2)
+    [first] = await worker.rules()
+    other = "export function other(): number {\n  return 1;\n}\n"
+    worker.stage_commit(SHA3, {"src/other.ts": other}, {"src/other.ts": ""})
+    await worker.add_commit_row(SHA3)
+    await worker.add_session(SHA3, [user_excerpt("Add the other function")])
+    worker.llm.queue(RuleExtraction(rules=[]))
+
+    await extract_rules(worker.deps, worker.repository_id, SHA3)
+
+    assert f'<rule id="{first.id}"' not in worker.llm.calls[1].prompt
