@@ -191,6 +191,51 @@ class RuleReview(Base):
     created_at: Mapped[datetime] = _now()
 
 
+class RuleProposal(Base):
+    """A rule a pull request would teach Rastro, shown before the merge (never in `rules`).
+
+    Produced by running the extraction in preview mode over a PR commit that has a session.
+    """
+
+    __tablename__ = "rule_proposals"
+    __table_args__ = (
+        UniqueConstraint("repository_id", "commit_sha", "proposal_key"),
+        Index("ix_rule_proposals_repository_pr", "repository_id", "pr_number"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    commit_sha: Mapped[str] = mapped_column(
+        Text, nullable=False
+    )  # the original SHA, not the merge's
+    proposal_key: Mapped[str] = mapped_column(Text, nullable=False)  # hash(statement + symbols)
+    action: Mapped[str] = mapped_column(Text, nullable=False)  # create | update
+    existing_rule_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("rules.id"))
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    origin_quote: Mapped[str | None] = mapped_column(Text)
+    symbols: Mapped[list[str]] = mapped_column(JSONB, nullable=False)  # path::qualified.name
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    # pending | superseded (9.2); confirmed | corrected | rejected | applied come with 9.3/9.4
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    reviewed_by: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _now()
+
+
+class RulePreview(Base):
+    """A PR commit whose preview already ran, so pushes only pay for new commits."""
+
+    __tablename__ = "rule_previews"
+
+    repository_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("repositories.id"), primary_key=True
+    )
+    commit_sha: Mapped[str] = mapped_column(Text, primary_key=True)
+    previewed_at: Mapped[datetime] = _now()
+
+
 class RuleOrigin(Base):
     __tablename__ = "rule_origins"
 

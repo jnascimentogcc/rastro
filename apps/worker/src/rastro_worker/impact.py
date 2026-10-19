@@ -51,6 +51,8 @@ from rastro_llm import (
 from rastro_worker.comment import Finding, render_all_clear, render_comment
 from rastro_worker.deps import WorkerDeps
 from rastro_worker.indexing import is_indexable
+from rastro_worker.preview import PreviewOutcome, refresh_preview
+from rastro_worker.retry import is_transient
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,7 @@ class ImpactResult:
     candidates: int = 0
     assessed: int = 0
     reported: int = 0
+    proposals: int = 0  # rules the PR proposes (preview), still pending
     commented: bool = False
     comment_id: int | None = None
 
@@ -110,7 +113,13 @@ async def analyze_pull_request(
     if repository is None or repository.installation_id == 0:
         return ImpactResult("skipped_unknown_repository")
     if await deps.over_budget(repository_id):
-        return ImpactResult("skipped_budget")  # no model call, and no comment either
+        # No impact analysis (it needs the model). The preview may still have cached proposals to
+        # show, and says it cannot run for new commits; with neither there is no comment at all.
+        preview = await _safe_preview(deps, llm, repository, number)
+        result = ImpactResult("skipped_budget", proposals=len(preview.items))
+        if preview.items or preview.unavailable:
+            await _publish(deps, repository, number, head_sha, [], [], result, preview)
+        return result
 
     files = await deps.github.get_pull_request_files(
         repository.installation_id, repository.full_name, number
@@ -147,8 +156,23 @@ async def analyze_pull_request(
         reverse=True,
     )
     result.reported = len(reported)
-    await _publish(deps, repository, number, head_sha, assessments, reported, result)
+    preview = await _safe_preview(deps, llm, repository, number)
+    result.proposals = len(preview.items)
+    await _publish(deps, repository, number, head_sha, assessments, reported, result, preview)
     return result
+
+
+async def _safe_preview(
+    deps: WorkerDeps, llm: LLMProvider, repository: Repository, number: int
+) -> PreviewOutcome:
+    """The preview is an extra: its failure must not cost the PR its impact comment."""
+    try:
+        return await refresh_preview(deps, llm, repository, number)
+    except Exception as error:
+        if is_transient(error):
+            raise  # the job retries later with backoff
+        logger.warning("rule preview of PR #%d failed: %s", number, error)
+        return PreviewOutcome()
 
 
 def _reportable(entry: tuple[_Candidate, str, ImpactAssessment], threshold: float) -> bool:
@@ -616,6 +640,7 @@ async def _publish(
     assessments: list[tuple[_Candidate, str, ImpactAssessment]],
     reported: list[tuple[_Candidate, str, ImpactAssessment]],
     result: ImpactResult,
+    preview: PreviewOutcome,
 ) -> None:
     language = deps.impact.impact_comment_language
     async with deps.session_factory() as session:
@@ -628,12 +653,18 @@ async def _publish(
     previously_flagged = bool(previous and any(f.get("reported") for f in previous.findings))
 
     comment_id = previous.comment_id if previous else None
-    if findings:
-        body = render_comment(findings, language)
+    if findings or preview.items or preview.unavailable:
+        body = render_comment(
+            findings,
+            language,
+            proposals=preview.items,
+            unavailable=preview.unavailable,
+            all_clear_sha=head_sha if previously_flagged else None,
+        )
         comment_id = await _post_or_update(deps, repository, number, comment_id, body)
         result.commented = True
-    elif comment_id is not None and previously_flagged:
-        body = render_all_clear(head_sha, language)
+    elif comment_id is not None:  # a warning or a proposal was shown before and no longer applies
+        body = render_all_clear(head_sha, language, flagged=previously_flagged)
         comment_id = await _post_or_update(deps, repository, number, comment_id, body)
         result.commented = True
     result.comment_id = comment_id
