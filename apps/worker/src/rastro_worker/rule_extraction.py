@@ -59,6 +59,7 @@ DUPLICATE_SIMILARITY = 0.92
 DUPLICATE_MIN_LINES = 3
 NEARBY_RULES_LIMIT = 6  # rules of neighbouring code offered to the model besides the direct ones
 NEARBY_UPDATE_MIN_SIMILARITY = 0.6  # an "update" of a nearby rule must still resemble it
+REJECTED_SIMILARITY = 0.92  # a new rule this close to a rejected one, on its symbols, is dropped
 SYMBOL_EMBEDDING_CHARS = 2_000
 ATTEMPTS = 2
 _NOISE_FILES = re.compile(r"(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|\.min\.(js|css)|\.map)$")
@@ -72,6 +73,7 @@ class ExtractionSummary:
     updated: int = 0
     discarded: int = 0
     unchanged: int = 0  # updates that would change nothing (typically refactors)
+    suppressed: int = 0  # new rules that repeat one a human rejected
     duplicates_linked: int = 0
     rule_ids: list[uuid.UUID] = field(default_factory=list)
 
@@ -519,6 +521,11 @@ async def _apply(
     metadata = {"repository_id": str(repository_id), "sha": sha}
     statement_vectors = await llm.embed([a.rule.statement for a in accepted], metadata=metadata)
     await _reject_unrelated_updates(deps, accepted, statement_vectors, nearby or set())
+    accepted, statement_vectors, summary.suppressed = await _drop_rejected_repeats(
+        deps, repository_id, accepted, statement_vectors, key_to_symbol, ids
+    )
+    if not accepted:
+        return summary
     anchored_keys = sorted({k for a in accepted for k in a.symbols})
     symbol_vectors = dict(
         zip(
@@ -614,6 +621,52 @@ async def _reject_unrelated_updates(
                 item.existing_id = None
 
 
+async def _drop_rejected_repeats(
+    deps: WorkerDeps,
+    repository_id: uuid.UUID,
+    accepted: list[_Accepted],
+    vectors: list[list[float]],
+    key_to_symbol: dict[str, tuple[str, Symbol]],
+    ids: dict[tuple[str, str], uuid.UUID],
+) -> tuple[list[_Accepted], list[list[float]], int]:
+    """A human rejected a rule: the model must not bring it back by proposing it again.
+
+    Only new rules are checked (an update targets an active rule by id). A match is a rejected rule
+    anchored to one of the same symbols whose statement is nearly identical.
+    """
+    kept: list[_Accepted] = []
+    kept_vectors: list[list[float]] = []
+    suppressed = 0
+    async with deps.session_factory() as session:
+        for item, vector in zip(accepted, vectors, strict=True):
+            if item.existing_id is None:
+                symbol_ids = {
+                    ids[(key_to_symbol[k][0], key_to_symbol[k][1].qualified_name)]
+                    for k in item.symbols
+                }
+                repeated = await session.scalar(
+                    select(Rule.id)
+                    .join(RuleAnchor, RuleAnchor.rule_id == Rule.id)
+                    .where(
+                        Rule.repository_id == repository_id,
+                        Rule.status == "rejected",
+                        Rule.embedding.is_not(None),
+                        Rule.embedding.cosine_distance(vector) <= 1 - REJECTED_SIMILARITY,
+                        RuleAnchor.symbol_id.in_(symbol_ids),
+                    )
+                    .limit(1)
+                )
+                if repeated is not None:
+                    logger.info(
+                        "rule %r repeats rejected rule %s: dropped", item.rule.statement, repeated
+                    )
+                    suppressed += 1
+                    continue
+            kept.append(item)
+            kept_vectors.append(vector)
+    return kept, kept_vectors, suppressed
+
+
 async def _store_rule(
     session: AsyncSession,
     repository_id: uuid.UUID,
@@ -630,6 +683,7 @@ async def _store_rule(
                     repository_id=repository_id,
                     statement=rule.statement.strip(),
                     rationale=item.rationale,
+                    rationale_source="conversation" if item.rationale else None,
                     confidence=rule.confidence,
                     embedding=vector,
                 )
@@ -638,14 +692,23 @@ async def _store_rule(
         ).scalar_one()
     else:
         rule_id = item.existing_id
+        current = (
+            await session.execute(select(Rule.statement, Rule.rationale).where(Rule.id == rule_id))
+        ).one()
+        statement = rule.statement.strip()
         values: dict[str, Any] = {
-            "statement": rule.statement.strip(),
+            "statement": statement,
             "confidence": rule.confidence,
             "embedding": vector,
             "updated_at": func.now(),
         }
         if item.rationale:  # a new commit without a stated reason must not erase the old one
             values["rationale"] = item.rationale
+            values["rationale_source"] = "conversation"
+        if statement != current.statement.strip() or (
+            item.rationale and item.rationale != current.rationale
+        ):
+            values["revision"] = Rule.revision + 1  # a validation of the old text no longer holds
         await session.execute(update(Rule).where(Rule.id == rule_id).values(**values))
     await session.execute(
         insert(RuleOrigin)

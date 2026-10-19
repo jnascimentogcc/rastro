@@ -66,12 +66,22 @@ class OriginOut(BaseModel):
     session_ref: str | None
 
 
+Validation = Literal["validated", "unvalidated", "rejected"]
+Verdict = Literal["confirmed", "corrected", "rejected", "rationale_added"]
+MAX_REVIEW_TEXT = 500  # reviewer text is data shown to others: keep it short
+
+
 class RuleOut(BaseModel):
     id: uuid.UUID
     statement: str
     rationale: str | None  # null = unknown origin, never guessed
+    rationale_source: str | None = None  # conversation | human
     confidence: float
-    status: str  # active | orphaned | superseded
+    status: str  # active | orphaned | superseded | rejected
+    validation: Validation = "unvalidated"  # a human fact, separate from the model's confidence
+    revision: int = 1
+    validated_by: str | None = None
+    validated_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     files: list[str]
@@ -79,9 +89,44 @@ class RuleOut(BaseModel):
     similarity: float | None = None  # only for semantic search
 
 
+class ReviewOut(BaseModel):
+    verdict: str
+    rule_revision: int
+    reviewer: str
+    reviewer_source: str  # github (verified) | cli (not verified)
+    statement_after: str | None
+    rationale_after: str | None
+    note: str | None
+    created_at: datetime
+
+
 class RuleDetailOut(RuleOut):
     origins: list[OriginOut]
     anchors: list[AnchorOut]
+    reviews: list[ReviewOut] = Field(default_factory=list)  # newest first
+
+
+class ReviewIn(BaseModel):
+    verdict: Verdict
+    reviewer: str = Field(min_length=1, max_length=200)
+    statement: str | None = Field(default=None, max_length=MAX_REVIEW_TEXT)
+    rationale: str | None = Field(default=None, max_length=MAX_REVIEW_TEXT)
+    note: str | None = Field(default=None, max_length=MAX_REVIEW_TEXT)
+
+    @field_validator("reviewer", "statement", "rationale", "note")
+    @classmethod
+    def _strip(cls, value: str | None) -> str | None:
+        return (value.strip() or None) if value is not None else None
+
+    @model_validator(mode="after")
+    def _required_text(self) -> "ReviewIn":
+        if not self.reviewer:
+            raise ValueError("reviewer must not be blank")
+        if self.verdict == "corrected" and not self.statement:
+            raise ValueError("a correction needs the new statement")
+        if self.verdict == "rationale_added" and not self.rationale:
+            raise ValueError("adding a reason needs the reason")
+        return self
 
 
 class RuleListOut(BaseModel):

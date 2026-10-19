@@ -6,23 +6,26 @@ text match when it does not (or when the embedding call fails).
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from sqlalchemy import ColumnElement, Float, exists, func, literal, or_, select
+from sqlalchemy import ColumnElement, Float, and_, exists, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from rastro_api.deps import CurrentRepository, DbSession
 from rastro_api.schemas import (
     AnchorOut,
     OriginOut,
+    ReviewIn,
+    ReviewOut,
     RuleDetailOut,
     RuleListOut,
     RuleOut,
+    Validation,
 )
 from rastro_db.budget import budget_exhausted
-from rastro_db.models import AgentSession, Commit, Rule, RuleAnchor, RuleOrigin
+from rastro_db.models import AgentSession, Commit, Rule, RuleAnchor, RuleOrigin, RuleReview
 from rastro_db.models import Symbol as SymbolRow
 from rastro_llm import LLMError, LLMProvider
 
@@ -79,8 +82,11 @@ async def list_rules(
     repository: CurrentRepository,
     session: DbSession,
     file: str | None = Query(default=None, description="Rules anchored in this file or directory"),
-    rule_status: Literal["active", "orphaned", "superseded", "all"] = Query(
+    rule_status: Literal["active", "orphaned", "superseded", "rejected", "all"] = Query(
         default="active", alias="status"
+    ),
+    validated: bool | None = Query(
+        default=None, description="true: confirmed by a human; false: not yet"
     ),
     q: str | None = Query(default=None, description="Search text (semantic when available)"),
     limit: int = Query(default=50, ge=1, le=100),
@@ -95,6 +101,13 @@ async def list_rules(
         filters.append(Rule.status == rule_status)
     if file:
         filters.append(_anchored_in_file(file))
+    if validated is True:
+        filters.append(and_(Rule.status != "rejected", Rule.validated_revision == Rule.revision))
+    elif validated is False:
+        filters.append(Rule.status != "rejected")
+        filters.append(
+            or_(Rule.validated_revision.is_(None), Rule.validated_revision != Rule.revision)
+        )
 
     order: list[Any] = [Rule.updated_at.desc()]
     if q and q.strip():
@@ -140,7 +153,80 @@ async def get_rule(
     )
     if rule is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rule not found")
+    return await _detail(session, rule)
 
+
+@router.post("/{rule_id}/reviews", response_model=RuleDetailOut)
+async def review_rule(
+    repo_id: uuid.UUID,
+    rule_id: uuid.UUID,
+    body: ReviewIn,
+    request: Request,
+    repository: CurrentRepository,
+    session: DbSession,
+) -> RuleDetailOut:
+    """A human confirms, corrects, rejects or explains a rule.
+
+    The reviewer name comes from the client (the CLI sends the git email), so it is recorded as
+    `reviewer_source = "cli"`: anyone holding the repository token could write another name.
+    """
+    _own_repository(repo_id, repository.id)
+    rule = await session.scalar(
+        select(Rule)
+        .where(Rule.id == rule_id, Rule.repository_id == repository.id)
+        .with_for_update()
+    )
+    if rule is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rule not found")
+    if rule.status == "rejected" and body.verdict != "rejected":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Rule was rejected")
+    if rule.status == "superseded":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Rule was superseded")
+
+    now = datetime.now(UTC)
+    if body.verdict == "rejected":
+        rule.status = "rejected"
+    elif body.verdict == "confirmed":
+        _validate_current_revision(rule, body.reviewer, now)
+    else:
+        statement_changes = body.verdict == "corrected" and body.statement != rule.statement
+        if body.rationale:
+            rule.rationale, rule.rationale_source = body.rationale, "human"
+        if statement_changes and body.statement:
+            rule.statement = body.statement
+            vector = await _embed_query(request, session, body.statement, repository.id)
+            if vector is not None:  # without a model the old embedding stays (slightly stale)
+                rule.embedding = vector
+        if statement_changes or body.rationale:
+            rule.revision += 1
+        if body.verdict == "corrected":  # whoever corrects a rule stands behind the new text
+            _validate_current_revision(rule, body.reviewer, now)
+    rule.updated_at = now
+    session.add(
+        RuleReview(
+            rule_id=rule.id,
+            rule_revision=rule.revision,
+            verdict=body.verdict,
+            reviewer=body.reviewer,
+            reviewer_source="cli",
+            statement_after=rule.statement if body.verdict == "corrected" else None,
+            rationale_after=body.rationale,
+            note=body.note,
+        )
+    )
+    await session.commit()
+    await session.refresh(rule)
+    return await _detail(session, rule)
+
+
+def _validate_current_revision(rule: Rule, reviewer: str, when: datetime) -> None:
+    rule.validated_revision, rule.validated_by, rule.validated_at = rule.revision, reviewer, when
+
+
+# --------------------------------------------------------------------------- helpers
+
+
+async def _detail(session: AsyncSession, rule: Rule) -> RuleDetailOut:
     [summary] = await _decorate(session, [(rule, None)])
     anchors = await session.execute(
         select(SymbolRow, RuleAnchor.role)
@@ -149,6 +235,11 @@ async def get_rule(
         .order_by(
             RuleAnchor.role.desc(), SymbolRow.file_path, SymbolRow.qualified_name
         )  # primary first
+    )
+    reviews = await session.scalars(
+        select(RuleReview)
+        .where(RuleReview.rule_id == rule.id)
+        .order_by(RuleReview.created_at.desc(), RuleReview.id)
     )
     return RuleDetailOut(
         **summary.model_dump(),
@@ -164,10 +255,26 @@ async def get_rule(
             )
             for symbol, role in anchors
         ],
+        reviews=[
+            ReviewOut(
+                verdict=r.verdict,
+                rule_revision=r.rule_revision,
+                reviewer=r.reviewer,
+                reviewer_source=r.reviewer_source,
+                statement_after=r.statement_after,
+                rationale_after=r.rationale_after,
+                note=r.note,
+                created_at=r.created_at,
+            )
+            for r in reviews
+        ],
     )
 
 
-# --------------------------------------------------------------------------- helpers
+def _validation(rule: Rule) -> Validation:
+    if rule.status == "rejected":
+        return "rejected"
+    return "validated" if rule.validated_revision == rule.revision else "unvalidated"
 
 
 async def _origins(session: AsyncSession, rule: Rule) -> list[OriginOut]:
@@ -229,8 +336,13 @@ async def _decorate(session: AsyncSession, rules: list[tuple[Rule, float | None]
             id=rule.id,
             statement=rule.statement,
             rationale=rule.rationale,
+            rationale_source=rule.rationale_source,
             confidence=rule.confidence,
             status=rule.status,
+            validation=_validation(rule),
+            revision=rule.revision,
+            validated_by=rule.validated_by if _validation(rule) == "validated" else None,
+            validated_at=rule.validated_at if _validation(rule) == "validated" else None,
             created_at=_aware(rule.created_at),
             updated_at=_aware(rule.updated_at),
             files=sorted(files.get(rule.id, [])),

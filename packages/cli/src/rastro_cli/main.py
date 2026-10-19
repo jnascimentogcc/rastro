@@ -142,7 +142,7 @@ def flush() -> None:
 
 # --------------------------------------------------------------------------- querying rules
 
-_STATUSES = ("active", "orphaned", "superseded", "all")
+_STATUSES = ("active", "orphaned", "superseded", "rejected", "all")
 
 
 def _api_context() -> tuple[Path, Config, str, str]:
@@ -164,6 +164,17 @@ def _api_context() -> tuple[Path, Config, str, str]:
     return root, config, token, repository_id
 
 
+def _detail(response: httpx.Response) -> str:
+    """The server's own explanation (a string, or the first validation error)."""
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        return f"HTTP {response.status_code}"
+    if isinstance(detail, list) and detail:
+        detail = detail[0].get("msg", detail[0]) if isinstance(detail[0], dict) else detail[0]
+    return str(detail) if detail else f"HTTP {response.status_code}"
+
+
 def _call[T](request: "Callable[[], T]") -> T:
     try:
         return request()
@@ -173,6 +184,8 @@ def _call[T](request: "Callable[[], T]") -> T:
             typer.echo("The server rejected the token: run `rastro init` again.", err=True)
         elif status == 404:
             typer.echo("Not found on the server.", err=True)
+        elif status in (409, 422):
+            typer.echo(f"The server refused it: {_detail(error.response)}", err=True)
         else:
             typer.echo(f"The server answered HTTP {status}.", err=True)
         raise typer.Exit(1) from None
@@ -202,12 +215,20 @@ def rules_command(
         str | None, typer.Option("--search", "-s", help="Search the rules (semantic if available).")
     ] = None,
     status: Annotated[
-        str, typer.Option("--status", help="active, orphaned, superseded or all.")
+        str, typer.Option("--status", help="active, orphaned, superseded, rejected or all.")
     ] = "active",
+    unvalidated: Annotated[
+        bool, typer.Option("--unvalidated", help="Only rules no human has confirmed yet.")
+    ] = False,
+    rejected: Annotated[
+        bool, typer.Option("--rejected", help="Only rules a reviewer rejected.")
+    ] = False,
     limit: Annotated[int, typer.Option("--limit", "-n", min=1, max=100)] = 20,
     as_json: Annotated[bool, typer.Option("--json", help="Print the server response.")] = False,
 ) -> None:
     """List the business rules of this repository and why they exist."""
+    if rejected:
+        status = "rejected"
     if status not in _STATUSES:
         typer.echo(f"--status must be one of: {', '.join(_STATUSES)}.", err=True)
         raise typer.Exit(2)
@@ -221,6 +242,7 @@ def rules_command(
             file=wanted,
             search=search,
             status=status,
+            validated=False if unvalidated else None,
             limit=limit,
         )
     )
@@ -233,22 +255,85 @@ def rules_command(
 @app.command("rule")
 def rule_command(
     rule_id: Annotated[str, typer.Argument(help="Rule id or a unique prefix of it.")],
+    confirm: Annotated[
+        bool, typer.Option("--confirm", help="Say the rule is right as written.")
+    ] = False,
+    reject: Annotated[
+        bool,
+        typer.Option("--reject", help="Say this is not a rule; it will not be proposed again."),
+    ] = False,
+    correct: Annotated[
+        str | None, typer.Option("--correct", help="Replace the statement with this text.")
+    ] = None,
+    why: Annotated[
+        str | None, typer.Option("--why", help="Write the reason the rule exists.")
+    ] = None,
+    note: Annotated[
+        str | None, typer.Option("--note", help="A comment kept with the review.")
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print the server response.")] = False,
 ) -> None:
-    """Show one rule with its code anchors and the history behind it."""
-    _, config, token, repository_id = _api_context()
-    full_id = rule_id
-    if len(rule_id) != 36:
-        listing = _call(
-            lambda: client.list_rules(token, config.api_url, repository_id, status="all", limit=100)
+    """Show one rule, or review it with --confirm, --reject, --correct and/or --why."""
+    actions = [confirm, reject, correct is not None or why is not None]
+    if sum(actions) > 1:
+        typer.echo("Use one of --confirm, --reject, or --correct/--why.", err=True)
+        raise typer.Exit(2)
+    if note and sum(actions) == 0:
+        typer.echo("--note goes with --confirm, --reject, --correct or --why.", err=True)
+        raise typer.Exit(2)
+    root, config, token, repository_id = _api_context()
+    full_id = _resolve_rule_id(rule_id, config, token, repository_id)
+
+    if sum(actions) == 0:
+        detail = _call(lambda: client.get_rule(token, config.api_url, repository_id, full_id))
+        typer.echo(
+            json.dumps(detail, indent=2) if as_json else render.render_rule(detail), nl=False
         )
-        matches = [r["id"] for r in listing["items"] if r["id"].startswith(rule_id.lower())]
-        if not matches:
-            typer.echo(f"No rule has an id starting with {rule_id}.", err=True)
-            raise typer.Exit(1)
-        if len(matches) > 1:
-            typer.echo(f"{rule_id} is ambiguous: {', '.join(m[:8] for m in matches)}.", err=True)
-            raise typer.Exit(1)
-        full_id = matches[0]
-    detail = _call(lambda: client.get_rule(token, config.api_url, repository_id, full_id))
-    typer.echo(json.dumps(detail, indent=2) if as_json else render.render_rule(detail), nl=False)
+        return
+
+    reviewer = _reviewer(root)
+    body: dict[str, str | None] = {"reviewer": reviewer, "note": note}
+    if confirm:
+        body["verdict"] = "confirmed"
+    elif reject:
+        body["verdict"] = "rejected"
+    elif correct is not None:
+        body.update(verdict="corrected", statement=correct, rationale=why)
+    else:
+        body.update(verdict="rationale_added", rationale=why)
+    result = _call(lambda: client.review_rule(token, config.api_url, repository_id, full_id, body))
+    if as_json:
+        typer.echo(json.dumps(result, indent=2))
+        return
+    typer.echo(
+        f"Recorded: {body['verdict']} by {reviewer} (not verified; the CLI trusts git config)."
+    )
+    typer.echo(render.render_rule(result), nl=False)
+
+
+def _resolve_rule_id(rule_id: str, config: Config, token: str, repository_id: str) -> str:
+    if len(rule_id) == 36:
+        return rule_id
+    listing = _call(
+        lambda: client.list_rules(token, config.api_url, repository_id, status="all", limit=100)
+    )
+    matches = [r["id"] for r in listing["items"] if r["id"].startswith(rule_id.lower())]
+    if not matches:
+        typer.echo(f"No rule has an id starting with {rule_id}.", err=True)
+        raise typer.Exit(1)
+    if len(matches) > 1:
+        typer.echo(f"{rule_id} is ambiguous: {', '.join(m[:8] for m in matches)}.", err=True)
+        raise typer.Exit(1)
+    return str(matches[0])
+
+
+def _reviewer(root: Path) -> str:
+    """Who is reviewing: the git email. The server cannot verify it, and says so."""
+    try:
+        email = git.run_git(["config", "user.email"], root).strip()
+    except git.GitError:
+        email = ""
+    if not email:
+        typer.echo("Set your identity first: git config user.email you@example.com", err=True)
+        raise typer.Exit(1)
+    return email

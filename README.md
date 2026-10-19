@@ -229,8 +229,29 @@ rastro rules --file src/agenda.ts              # rules anchored in a file (or a 
 rastro rules --search "can implants be booked on fridays"   # semantic search; plain text match without an embedding model
 rastro rules --status orphaned                 # active (default), orphaned, superseded or all
 rastro rules --limit 50 --json                 # raw server response
-rastro rule 4f3e2d1c                           # one rule: code anchors (primary/duplicate) and the commits behind it
+rastro rule 4f3e2d1c                           # one rule: code anchors (primary/duplicate), review state and the commits behind it
 ```
+
+## Validating rules (phase 9.1)
+
+A human can say whether a rule is right. This is a separate fact from the model's confidence.
+
+```bash
+rastro rules --unvalidated                     # rules nobody has confirmed yet
+rastro rules --rejected                        # rules a reviewer rejected
+rastro rule 4f3e2d1c --confirm                 # "this is right as written"
+rastro rule 4f3e2d1c --correct "New statement" --why "Because ..."   # rewrite it (and optionally give the reason)
+rastro rule 4f3e2d1c --why "Because ..."       # only add the reason the conversation never gave
+rastro rule 4f3e2d1c --reject --note "not a real rule"
+```
+
+A confirmation holds for one *revision* of the rule: when an extraction or a correction changes its
+statement or reason, the revision rises and the rule is unvalidated again. A rejected rule stays in
+the database (with its embedding and anchors) so that extraction does not propose it again; it is
+excluded from searches, impact analysis and the default list. The reviewer is the `git config
+user.email` and is recorded as **not verified**: anyone holding the repository token could write
+another name. Verified identities arrive with the GitHub flow (phase 9.3). Spec:
+`docs/spec-fase-9-validacao-humana.md`.
 
 A rule whose conversation never said why shows "unknown origin" instead of a guessed reason.
 The server exposes the same data at `GET /v1/repos/{id}/rules` (filters `file`, `status`, `q`,
