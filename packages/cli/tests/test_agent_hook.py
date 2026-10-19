@@ -194,12 +194,19 @@ def test_the_hook_finds_the_root_from_a_subdirectory(root: Path) -> None:
     assert hook_entry.pre_tool(json.dumps(body).encode()) is not None
 
 
-def test_windows_paths_and_a_bom_are_understood(root: Path) -> None:
-    body = json.loads(event(root, "Read", "src/agenda.ts"))
-    body["tool_input"]["file_path"] = str(root / "src" / "agenda.ts").replace("/", "\\")
-    raw = b"\xef\xbb\xbf" + json.dumps(body).encode()  # PowerShell 5.1 pipes a BOM
+def test_a_bom_in_front_of_the_event_is_ignored(root: Path) -> None:
+    raw = b"ï»¿" + event(root, "Read", "src/agenda.ts")  # PowerShell 5.1 pipes a BOM
 
     assert hook_entry.pre_tool(raw) is not None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="backslash paths only exist on Windows")
+def test_windows_paths_with_backslashes_and_other_case_are_understood(root: Path) -> None:
+    body = json.loads(event(root, "Read", "src/agenda.ts"))
+    path = str(root / "src" / "agenda.ts")
+    body["tool_input"]["file_path"] = path.replace("/", "\\").upper()
+
+    assert hook_entry.pre_tool(json.dumps(body).encode()) is not None
 
 
 # --------------------------------------------------------------------------- untrusted text
