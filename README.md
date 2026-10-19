@@ -273,6 +273,17 @@ reaches `rules` until phase 9.4 applies them at merge. The reviewer is the verif
 event, unlike the CLI. **Not yet verified against a real App:** that ticking a box in a bot comment
 arrives as an `issue_comment` `edited` event with the right `sender`; if it does not, use `/rastro ok`.
 
+### What happens at merge (phase 9.4)
+
+When the PR is merged, each commit that was previewed lands **exactly as the reviewers saw it**,
+without calling the model again: unreviewed proposals become ordinary (unvalidated) rules; confirmed
+and corrected ones become rules validated by the GitHub login that reviewed them (with a
+`rule_reviews` entry, source `github`); a reason written by a person is kept as theirs; a rejected
+proposal is stored as a `rejected` rule so it is never proposed again, and a rejected *change* to an
+existing rule simply leaves that rule alone. A commit that was never previewed (or whose session
+arrived after the preview) is extracted the usual way. If the model account has no credit at merge
+time the reviews wait, intact, for `python -m rastro_worker.requeue`.
+
 ### Rule preview in the pull request (phase 9.2)
 
 The single PR comment gets a second section, "rules this PR proposes", read from the sessions of the
