@@ -300,3 +300,90 @@ def test_default_window() -> None:
     start, end = default_window(T0, T0 - timedelta(hours=2))
     assert (start, end) == (T0 - timedelta(hours=2), T0 + timedelta(seconds=60))
     assert default_window(T0, None)[0] == T0 - timedelta(hours=24)
+
+
+def bash_session(root: str, command: str, **tool_kw: object) -> SessionBuilder:
+    b = SessionBuilder(root)
+    b.human("remove the cancellation rule")
+    b.tool("Bash", {"command": command}, tool_id="t1", **tool_kw)  # type: ignore[arg-type]
+    return b
+
+
+def test_bash_sed_in_place_counts_as_an_edit(tmp_path: Path) -> None:
+    command = (
+        "sed -i '3,5d' src/domain/cancellation.ts && "
+        "sed -i '2a const MIN = 1;' src/domain/cancellation.ts"
+    )
+    b = bash_session(ROOT_POSIX, command)
+
+    captured = extract(b, tmp_path, {"src/domain/cancellation.ts"}, ROOT_POSIX)
+
+    assert captured is not None
+    edits = [e for e in captured.excerpts if e.kind == "edit"]
+    assert [e.files for e in edits] == [("src/domain/cancellation.ts",)]
+    assert edits[0].text == "Bash src/domain/cancellation.ts"
+    assert "sed" not in "".join(e.text for e in captured.excerpts)
+    assert any(e.kind == "intent" for e in captured.excerpts)
+
+
+def test_bash_writers_count(tmp_path: Path) -> None:
+    f = "src/a.ts"
+    absolute = f"{ROOT_POSIX}/{f}"
+    commands = [
+        f"echo 'x' > {f}",
+        f"echo x >> {absolute}",
+        f"cat patch.txt | tee {f}",
+        f"mv /tmp/new.ts {f}",
+        f"cp /tmp/new.ts {f}",
+        f"git checkout -- {f}",
+        f"git apply <<'EOF'\n--- a/{f}\n+++ b/{f}\n@@ -1 +1 @@\n-a\n+b\nEOF",
+        f"python - <<'EOF'\nfrom pathlib import Path\nPath('{f}').write_text('x')\nEOF",
+        f"node -e \"require('fs').writeFileSync('{f}', 'x')\"",
+        f"perl -pi -e 's/a/b/' {f}",
+    ]
+    for command in commands:
+        b = bash_session(ROOT_POSIX, command)
+        assert extract(b, tmp_path, {f}, ROOT_POSIX) is not None, command
+
+
+def test_bash_reads_do_not_count(tmp_path: Path) -> None:
+    f = "src/a.ts"
+    commands = [
+        f"cat {f}",
+        f"grep -n cancel {f}",
+        f"sed -n '1,20p' {f}",
+        f"git diff {f}",
+        f"cat {f} > /tmp/copy.ts",
+        f"cp {f} /tmp/backup.ts",
+        f"python -c \"print(open('{f}').read())\"",
+        f"echo {f} 2>/dev/null",
+    ]
+    for command in commands:
+        b = bash_session(ROOT_POSIX, command)
+        assert extract(b, tmp_path, {f}, ROOT_POSIX) is None, command
+
+
+def test_failed_or_denied_bash_edits_are_ignored(tmp_path: Path) -> None:
+    command = "sed -i 's/a/b/' src/a.ts"
+    assert (
+        extract(bash_session(ROOT_POSIX, command, error=True), tmp_path, {"src/a.ts"}, ROOT_POSIX)
+        is None
+    )
+    denied = bash_session(ROOT_POSIX, command, denial="user-rejected")
+    assert extract(denied, tmp_path, {"src/a.ts"}, ROOT_POSIX) is None
+
+
+def test_bash_edit_outside_repo_or_unchanged_file_is_ignored(tmp_path: Path) -> None:
+    outside = bash_session(ROOT_POSIX, "sed -i 's/a/b/' /home/dev/clinic-other/src/a.ts")
+    assert extract(outside, tmp_path, {"src/a.ts"}, ROOT_POSIX) is None
+    other = bash_session(ROOT_POSIX, "sed -i 's/a/b/' src/b.ts")
+    assert extract(other, tmp_path, {"src/a.ts"}, ROOT_POSIX) is None
+
+
+def test_bash_edit_with_secret_never_leaks_command(tmp_path: Path) -> None:
+    b = bash_session(ROOT_POSIX, "sed -i 's/a/sk-abcdefghijklmnopqrstuvwxyz1234/' src/a.ts")
+
+    captured = extract(b, tmp_path, {"src/a.ts"}, ROOT_POSIX)
+
+    assert captured is not None
+    assert "sk-abcdef" not in str(captured)

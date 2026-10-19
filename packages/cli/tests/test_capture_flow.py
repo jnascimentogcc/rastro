@@ -168,3 +168,31 @@ def test_capture_run_command_reads_projects_dir_from_environment(
 
     assert result.exit_code == 0
     assert len(seen) == 1
+
+
+def test_silent_capture_is_explained_in_the_log(
+    scenario: tuple[Path, str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, _, projects = scenario
+    other = commit_file(repo, "src/unrelated.ts", "export {};", T0 + timedelta(minutes=20))
+    serve(monkeypatch)
+
+    run_capture(repo, other, projects)
+
+    log = (repo / ".rastro" / "capture.log").read_text(encoding="utf-8")
+    assert f"{other[:8]}: session sess-42 captured nothing" in log
+    assert "window" in log
+    assert "none edited the commit's files" in log or "no assistant activity" in log
+
+
+def test_missing_session_file_is_logged(
+    scenario: tuple[Path, str, Path], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo, sha, _ = scenario
+    serve(monkeypatch)
+
+    run_capture(repo, sha, tmp_path / "empty-projects")
+
+    assert "no Claude Code session file" in (repo / ".rastro" / "capture.log").read_text(
+        encoding="utf-8"
+    )

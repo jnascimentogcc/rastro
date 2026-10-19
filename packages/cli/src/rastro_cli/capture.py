@@ -22,6 +22,7 @@ from rastro_cli.config import (
 from rastro_session_parsers import (
     CapturedSession,
     default_window,
+    explain_no_edits,
     extract_session,
     find_session_files,
 )
@@ -76,10 +77,17 @@ def collect_payloads(
     start, end = default_window(git.commit_time(root, sha), git.parent_commit_time(root, sha))
     branch = git.current_branch(root)
     payloads: list[dict[str, Any]] = []
-    for path in find_session_files(root, start, projects_dir):
+    window = f"{start.isoformat(timespec='seconds')}..{end.isoformat(timespec='seconds')}"
+    sessions = find_session_files(root, start, projects_dir)
+    if not sessions:
+        log(root, f"{sha[:8]}: no Claude Code session file for this repository since {window}")
+    for path in sessions:
         captured = extract_session(path, root, files, start, end, branch=branch)
         if captured is not None:
             payloads.append(to_payload(sha, captured))
+        else:
+            reason = explain_no_edits(path, start, end, branch=branch)
+            log(root, f"{sha[:8]}: session {path.stem} captured nothing, window {window}: {reason}")
     return payloads
 
 
