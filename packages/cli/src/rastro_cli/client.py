@@ -51,6 +51,20 @@ def list_rules(
         return result
 
 
+def get_rules_snapshot(
+    token: str, api_url: str, repository_id: str, etag: str | None
+) -> tuple[dict[str, Any], str] | None:
+    """The active-rules snapshot and its ETag, or None when `etag` is still current (304)."""
+    headers = {"If-None-Match": etag} if etag else {}
+    with make_client(token, api_url) as client:
+        response = client.get(f"/v1/repos/{repository_id}/rules/snapshot", headers=headers)
+        if response.status_code == 304:
+            return None
+        response.raise_for_status()
+        snapshot: dict[str, Any] = response.json()
+        return snapshot, response.headers.get("etag", "")
+
+
 def get_rule(token: str, api_url: str, repository_id: str, rule_id: str) -> dict[str, Any]:
     with make_client(token, api_url) as client:
         response = client.get(f"/v1/repos/{repository_id}/rules/{rule_id}")
