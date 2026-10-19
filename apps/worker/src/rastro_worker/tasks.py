@@ -7,10 +7,11 @@ from githubkit.exception import GitHubException, RequestFailed
 from sqlalchemy import select
 
 from rastro_db.models import Repository
-from rastro_worker import impact, indexing, merged_pr, resync, review, rule_extraction
+from rastro_worker import impact, indexing, merged_pr, recovery, resync, review, rule_extraction
 from rastro_worker.app import app
 from rastro_worker.deps import get_deps
 from rastro_worker.retry import retry_transient
+from rastro_worker.settings import RecoverySettings
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,19 @@ async def repository_is_active(repository_id: str) -> bool:
 async def ping(message: str = "pong") -> str:
     """Smoke-test task proving the queue and the worker are wired up."""
     return message
+
+
+@app.periodic(cron="* * * * *")
+@app.task(name="recover_stalled_jobs", queueing_lock="recover_stalled_jobs")
+async def recover_stalled_jobs(timestamp: int) -> None:
+    """Retry (or, after too many attempts, fail) the jobs of workers that died. Runs every minute
+    on any live worker; no repository lock, so it is never stuck behind the jobs it frees."""
+    settings = RecoverySettings()
+    await recovery.recover_stalled_jobs(
+        app,
+        stalled_timeout=settings.worker_stalled_timeout_seconds,
+        max_attempts=settings.job_max_attempts,
+    )
 
 
 @app.task(name="index_repository", retry=retry_transient)

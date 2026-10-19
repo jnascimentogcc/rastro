@@ -10,7 +10,11 @@ async def test_ping_runs_through_the_queue() -> None:
             await ping.defer_async(message="hello")
             await test_app.run_worker_async(wait=False)
 
-            jobs = list(test_app.connector.jobs.values())  # type: ignore[attr-defined]
+            jobs = [
+                j
+                for j in test_app.connector.jobs.values()  # type: ignore[attr-defined]
+                if j["task_name"] == "ping"  # the worker also defers the periodic recovery job
+            ]
 
     assert len(jobs) == 1
     assert jobs[0]["status"] == "succeeded"
