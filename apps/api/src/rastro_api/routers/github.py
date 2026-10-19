@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from rastro_api.deps import DbSession
 from rastro_api.queueing import enqueue
 from rastro_db.models import Commit, Repository, WebhookDelivery
-from rastro_github import GitHubSettings, verify_signature
+from rastro_github import COMMENT_MARKER, GitHubSettings, verify_signature
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["github"])
@@ -297,6 +297,60 @@ async def _on_pull_request(
     return True
 
 
+MAX_COMMENT_CHARS = 20_000  # a Rastro comment is far smaller; this only bounds the job payload
+
+
+async def _on_issue_comment(
+    payload: dict[str, Any], session: AsyncSession, queue: procrastinate.App
+) -> bool:
+    """A comment on a pull request: a `/rastro ...` command, or an edit of Rastro's own comment
+    (a ticked checkbox). Whether the sender may review is decided by the job, against GitHub."""
+    action = payload.get("action")
+    issue = payload.get("issue") or {}
+    if action not in ("created", "edited") or "pull_request" not in issue:
+        return False  # plain issues have no proposals
+    sender = payload.get("sender") or {}
+    login = str(sender.get("login") or "")
+    if not login or sender.get("type") == "Bot" or login.endswith("[bot]"):
+        return False  # Rastro's own edits must not start a loop
+    comment = payload.get("comment") or {}
+    body = str(comment.get("body") or "")[:MAX_COMMENT_CHARS]
+    previous = ""
+    if action == "created":
+        if not body.lstrip().lower().startswith("/rastro"):
+            return False
+    else:
+        previous = str((payload.get("changes") or {}).get("body", {}).get("from") or "")
+        if COMMENT_MARKER not in body or not previous:
+            return False
+
+    repo = payload["repository"]
+    installation = payload.get("installation") or {}
+    repository_id = await _upsert_repository(
+        session,
+        github_id=int(repo["id"]),
+        full_name=repo["full_name"],
+        installation_id=int(installation.get("id", 0))
+        or await _known_installation(session, int(repo["id"])),
+        default_branch=repo.get("default_branch"),
+    )
+    await session.commit()
+    if not await _is_active(session, repository_id):
+        return False
+    await enqueue(
+        queue,
+        "apply_review",
+        repository_id,
+        number=int(issue["number"]),
+        comment_id=int(comment["id"]),
+        sender=login,
+        event_action=action,
+        body=body,
+        previous_body=previous[:MAX_COMMENT_CHARS],
+    )
+    return True
+
+
 def _parse_time(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
@@ -312,4 +366,5 @@ _HANDLERS = {
     "installation_repositories": _on_installation_repositories,
     "push": _on_push,
     "pull_request": _on_pull_request,
+    "issue_comment": _on_issue_comment,
 }

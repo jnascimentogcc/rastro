@@ -324,3 +324,51 @@ def commit_json(sha: str) -> dict[str, object]:
         "committer": None,
         "parents": [],
     }
+
+
+def permission_json(permission: str) -> dict[str, object]:
+    return {"permission": permission, "role_name": permission, "user": None}
+
+
+async def test_the_collaborator_permission_is_read_from_the_permission_endpoint(
+    private_key_pem: str,
+) -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        seen.append(request.url.path)
+        return httpx.Response(200, json=permission_json("maintain"))
+
+    client = make_client(private_key_pem, httpx.MockTransport(handler))
+
+    assert await client.get_collaborator_permission(120, "acme/clinic", "ana") == "maintain"
+    assert seen == ["/repos/acme/clinic/collaborators/ana/permission"]
+
+
+async def test_somebody_who_is_not_a_collaborator_has_no_permission(private_key_pem: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    client = make_client(private_key_pem, httpx.MockTransport(handler))
+
+    assert await client.get_collaborator_permission(121, "acme/clinic", "stranger") == "none"
+
+
+async def test_other_errors_while_reading_the_permission_are_not_swallowed(
+    private_key_pem: str,
+) -> None:
+    from githubkit.exception import RequestFailed
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        return httpx.Response(500, json={"message": "boom"})
+
+    client = make_client(private_key_pem, httpx.MockTransport(handler))
+
+    with pytest.raises(RequestFailed):
+        await client.get_collaborator_permission(122, "acme/clinic", "ana")
