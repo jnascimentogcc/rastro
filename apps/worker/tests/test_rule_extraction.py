@@ -1,10 +1,10 @@
 import uuid
 
 from procrastinate import testing
-from sqlalchemy import select
+from sqlalchemy import select, update
 from worker_support import WorkerContext, user_excerpt
 
-from rastro_db.models import LlmCall, RuleOrigin
+from rastro_db.models import LlmCall, Rule, RuleOrigin
 from rastro_db.models import Symbol as SymbolRow
 from rastro_llm import (
     ExtractedRule,
@@ -17,6 +17,7 @@ from rastro_llm import (
 )
 from rastro_worker import tasks
 from rastro_worker.app import app
+from rastro_worker.indexing import index_repository
 from rastro_worker.rule_extraction import extract_rules
 
 SHA1, SHA2, SHA3 = "1" * 40, "2" * 40, "3" * 40
@@ -718,3 +719,89 @@ async def test_rules_of_other_files_are_not_offered(worker: WorkerContext) -> No
     await extract_rules(worker.deps, worker.repository_id, SHA3)
 
     assert f'<rule id="{first.id}"' not in worker.llm.calls[1].prompt
+
+
+async def test_a_new_rule_records_where_its_reason_came_from(worker: WorkerContext) -> None:
+    await stage_friday_commit(worker)
+    worker.llm.queue(RuleExtraction(rules=[rule()]))
+
+    await extract_rules(worker.deps, worker.repository_id, SHA2)
+
+    [created] = await worker.rules()
+    assert (created.revision, created.rationale_source) == (1, "conversation")
+    assert created.validated_revision is None
+
+
+async def test_changing_the_statement_bumps_the_revision_and_voids_a_validation(
+    worker: WorkerContext,
+) -> None:
+    await stage_friday_commit(worker)
+    worker.llm.queue(RuleExtraction(rules=[rule()]))
+    await extract_rules(worker.deps, worker.repository_id, SHA2)
+    [first] = await worker.rules()
+    async with worker.deps.session_factory() as session, session.begin():
+        await session.execute(
+            update(Rule).where(Rule.id == first.id).values(validated_revision=1, validated_by="ana")
+        )
+
+    worker.stage_commit(SHA3, {AGENDA: AFTER_SATURDAY}, {AGENDA: AFTER})
+    await worker.add_commit_row(SHA3)
+    await worker.add_session(SHA3, [user_excerpt("Also block Saturday for implants")])
+    worker.llm.queue(
+        RuleExtraction(
+            rules=[
+                rule(
+                    action="update",
+                    existing_rule_id=str(first.id),
+                    statement="Implants cannot be booked on Friday afternoon or on Saturday",
+                    rationale=None,
+                    origin_quote=None,
+                )
+            ]
+        )
+    )
+    await extract_rules(worker.deps, worker.repository_id, SHA3)
+
+    [after] = await worker.rules()
+    assert after.revision == 2 and after.validated_revision == 1  # no longer validated
+    assert after.rationale_source == "conversation"  # the old reason is kept, with its source
+
+
+async def test_a_rule_a_human_rejected_is_not_created_again(worker: WorkerContext) -> None:
+    worker.github.set_tree(worker.full_name, SHA1, {AGENDA: BEFORE}, head_of="main")
+    await index_repository(worker.deps, worker.repository_id)
+    statement = "Implants cannot be booked on Friday afternoon"
+    await worker.add_rule(
+        statement,
+        {(AGENDA, "AgendaService.validate"): "primary"},
+        status="rejected",
+        embedding=hashing_embedding(statement, 1024),
+    )
+    await stage_friday_commit(worker)
+    worker.llm.queue(RuleExtraction(rules=[rule(statement=statement)]))
+
+    summary = await extract_rules(worker.deps, worker.repository_id, SHA2)
+
+    assert (summary.created, summary.suppressed) == (0, 1)
+    [only] = await worker.rules()
+    assert only.status == "rejected"  # still the single rule, and still rejected
+
+
+async def test_a_different_rule_on_the_same_symbol_is_not_blocked_by_a_rejection(
+    worker: WorkerContext,
+) -> None:
+    worker.github.set_tree(worker.full_name, SHA1, {AGENDA: BEFORE}, head_of="main")
+    await index_repository(worker.deps, worker.repository_id)
+    rejected = "Gift vouchers expire twelve months after purchase"
+    await worker.add_rule(
+        rejected,
+        {(AGENDA, "AgendaService.validate"): "primary"},
+        status="rejected",
+        embedding=hashing_embedding(rejected, 1024),
+    )
+    await stage_friday_commit(worker)
+    worker.llm.queue(RuleExtraction(rules=[rule()]))
+
+    summary = await extract_rules(worker.deps, worker.repository_id, SHA2)
+
+    assert (summary.created, summary.suppressed) == (1, 0)

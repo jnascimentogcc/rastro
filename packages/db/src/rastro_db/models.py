@@ -155,10 +155,40 @@ class Rule(Base):
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     rationale: Mapped[str | None] = mapped_column(Text)  # NULL = unknown origin
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    # active | orphaned | superseded | rejected (a human rejected it; kept as memory, see rule_reviews)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
     created_at: Mapped[datetime] = _now()
     updated_at: Mapped[datetime] = _now()
+    # Bumped whenever statement or rationale change. A rule is validated while
+    # validated_revision == revision, so an edit invalidates the validation by itself.
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    validated_revision: Mapped[int | None] = mapped_column(Integer)  # NULL = never validated
+    validated_by: Mapped[str | None] = mapped_column(Text)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rationale_source: Mapped[str | None] = mapped_column(Text)  # conversation | human | NULL
+
+
+class RuleReview(Base):
+    """Append-only history of human verdicts on a rule."""
+
+    __tablename__ = "rule_reviews"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    rule_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("rules.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rule_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    # confirmed | corrected | rejected | rationale_added
+    verdict: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer: Mapped[str] = mapped_column(Text, nullable=False)  # GitHub login or git email
+    reviewer_source: Mapped[str] = mapped_column(Text, nullable=False)  # github | cli (unverified)
+    reviewer_is_session_author: Mapped[bool | None] = mapped_column(Boolean)
+    statement_after: Mapped[str | None] = mapped_column(Text)
+    rationale_after: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    pr_number: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = _now()
 
 
 class RuleOrigin(Base):

@@ -33,10 +33,13 @@ def list_rules(
     file: str | None = None,
     search: str | None = None,
     status: str = "active",
+    validated: bool | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {"status": status, "limit": limit, "offset": offset}
+    if validated is not None:
+        params["validated"] = str(validated).lower()
     if file:
         params["file"] = file
     if search:
@@ -51,6 +54,16 @@ def list_rules(
 def get_rule(token: str, api_url: str, repository_id: str, rule_id: str) -> dict[str, Any]:
     with make_client(token, api_url) as client:
         response = client.get(f"/v1/repos/{repository_id}/rules/{rule_id}")
+        response.raise_for_status()
+        result: dict[str, Any] = response.json()
+        return result
+
+
+def review_rule(
+    token: str, api_url: str, repository_id: str, rule_id: str, body: dict[str, Any]
+) -> dict[str, Any]:
+    with make_client(token, api_url) as client:
+        response = client.post(f"/v1/repos/{repository_id}/rules/{rule_id}/reviews", json=body)
         response.raise_for_status()
         result: dict[str, Any] = response.json()
         return result

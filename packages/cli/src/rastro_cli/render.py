@@ -47,6 +47,8 @@ def render_rules(payload: dict[str, Any], *, status: str, search: str | None = N
     blocks = [header, ""]
     for number, rule in enumerate(items, start=1):
         marker = "" if rule["status"] == "active" else f" [{rule['status']}]"
+        if rule.get("validation") == "validated":
+            marker += " [validated]"
         score = f"  ({rule['similarity']:.0%} match)" if rule.get("similarity") is not None else ""
         blocks.append(_wrap(f"{number:>2}. ", rule["statement"] + marker + score))
         why = rule["rationale"] or "unknown origin (the conversation did not say why)"
@@ -62,15 +64,27 @@ def render_rules(payload: dict[str, Any], *, status: str, search: str | None = N
     return "\n".join(blocks).rstrip() + "\n"
 
 
+def _validation(rule: dict[str, Any]) -> str:
+    state = rule.get("validation", "unvalidated")
+    if state == "rejected":
+        return "rejected by a reviewer (kept so it is not proposed again)"
+    if state != "validated":
+        return "not validated"
+    when = _date(rule.get("validated_at"))
+    return f"validated by {rule.get('validated_by')}" + (f" on {when}" if when else "")
+
+
 def render_rule(rule: dict[str, Any]) -> str:
+    why = rule["rationale"] or "unknown origin (not stated in the conversation)"
+    if rule["rationale"] and rule.get("rationale_source") == "human":
+        why += " (written by a reviewer)"
     lines = [
         _wrap("", rule["statement"]),
         "",
         f"id:         {rule['id']}",
         f"status:     {rule['status']}  (confidence {rule['confidence']:.0%})",
-        _wrap(
-            "why:        ", rule["rationale"] or "unknown origin (not stated in the conversation)"
-        ),
+        f"review:     {_validation(rule)}",
+        _wrap("why:        ", why),
     ]
     if rule["anchors"]:
         lines += ["", "code:"]
@@ -91,4 +105,15 @@ def render_rule(rule: dict[str, Any]) -> str:
             lines.append(f"  commit {origin['commit_sha'][:7]}" + (f"  {when}" if when else ""))
             if origin.get("quote"):
                 lines.append(_wrap('    "', origin["quote"] + '"'))
+    if rule.get("reviews"):
+        lines += ["", "reviews:"]
+        for entry in rule["reviews"]:
+            when = _date(entry.get("created_at"))
+            verified = "" if entry.get("reviewer_source") == "github" else " (not verified)"
+            lines.append(
+                f"  {entry['verdict']} by {entry['reviewer']}{verified}"
+                + (f"  {when}" if when else "")
+            )
+            if entry.get("note"):
+                lines.append(_wrap('    "', entry["note"] + '"'))
     return "\n".join(lines) + "\n"
