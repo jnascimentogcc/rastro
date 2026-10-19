@@ -485,10 +485,30 @@ def _last_str(rows: list[dict[str, Any]], key: str) -> str | None:
     return next((v for r in reversed(rows) if isinstance(v := r.get(key), str) and v), None)
 
 
+MAX_LOOKBACK = timedelta(hours=24)
+
+
+def wide_window_start(commit_time: datetime) -> datetime:
+    """Earliest start ever tried for a commit (also what `rastro capture --since` suggests)."""
+    return commit_time - MAX_LOOKBACK
+
+
 def default_window(
-    commit_time: datetime, previous_commit_time: datetime | None
+    commit_time: datetime,
+    previous_commit_time: datetime | None,
+    last_captured_time: datetime | None = None,
 ) -> tuple[datetime, datetime]:
-    """Window of session activity that belongs to a commit: since the previous commit (or 24 h
-    before when there is none), until just after the commit."""
-    start = previous_commit_time or commit_time - timedelta(hours=24)
+    """Window of session activity that belongs to a commit, until just after the commit.
+
+    It starts at the parent's time, but never later than the last commit that was already
+    captured (at most 24 h before this commit): a parent created after the conversation (a
+    squash merge made by GitHub) must not hide it. Edits are still only counted when they touch
+    this commit's files, and nothing before an already-captured commit is taken again. With
+    neither, 24 h before the commit.
+    """
+    candidates = [previous_commit_time]
+    if last_captured_time is not None:
+        candidates.append(max(last_captured_time, wide_window_start(commit_time)))
+    known = [c for c in candidates if c is not None]
+    start = min(known) if known else wide_window_start(commit_time)
     return start, commit_time + timedelta(seconds=60)

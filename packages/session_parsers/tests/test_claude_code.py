@@ -302,6 +302,18 @@ def test_default_window() -> None:
     assert default_window(T0, None)[0] == T0 - timedelta(hours=24)
 
 
+def test_default_window_starts_before_a_parent_newer_than_the_last_captured_commit() -> None:
+    parent = T0 - timedelta(minutes=5)
+    captured = T0 - timedelta(minutes=20)
+    assert default_window(T0, parent, captured)[0] == captured
+    # an already-captured commit newer than the parent never narrows the window
+    assert default_window(T0, parent, T0 - timedelta(minutes=1))[0] == parent
+    # capture history older than 24 h is bounded
+    assert default_window(T0, parent, T0 - timedelta(days=3))[0] == T0 - timedelta(hours=24)
+    # root commit with history
+    assert default_window(T0, None, captured)[0] == captured
+
+
 def bash_session(root: str, command: str, **tool_kw: object) -> SessionBuilder:
     b = SessionBuilder(root)
     b.human("remove the cancellation rule")

@@ -38,6 +38,14 @@ failures are logged to `.rastro/capture.log`, and so is a commit for which a ses
 (with the time window and the reason). Edits made through Claude Code's Edit/Write/MultiEdit tools are recognised, as are Bash
 commands that write a changed file (`sed -i`, `tee`, `>`, `mv`, `git apply`, scripts calling `write_text`...); the command text is never uploaded.
 
+A commit's session window starts at its parent's commit time, but never later than the last commit already captured
+(`.rastro/captured.json`, at most 24 h back), so a squash-merge commit created by GitHub after the conversation does not hide it.
+If a wider window (24 h) would have captured something the automatic one missed, `capture.log` says so and prints the recovery command:
+
+```bash
+rastro capture --sha <sha> --since 2026-10-05T11:30    # recapture with an explicit window start and upload (idempotent)
+```
+
 ## Running with Docker
 
 The compose file runs the whole stack: `postgres` (pgvector), a one-shot `migrate` service

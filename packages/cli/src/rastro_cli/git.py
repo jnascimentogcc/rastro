@@ -38,6 +38,10 @@ def head_sha(root: Path) -> str:
     return run_git(["rev-parse", "HEAD"], root).strip()
 
 
+def resolve_sha(root: Path, revision: str) -> str:
+    return run_git(["rev-parse", "--verify", f"{revision}^{{commit}}"], root).strip()
+
+
 def current_branch(root: Path) -> str | None:
     """Branch name, or None on a detached HEAD."""
     name = run_git(["rev-parse", "--abbrev-ref", "HEAD"], root).strip()

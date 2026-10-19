@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -101,15 +102,61 @@ def _exclude_data_dir(root: Path) -> None:
 
 
 @app.command("capture")
-def capture_hook() -> None:
-    """Hook entry point: return immediately and capture in the background."""
+def capture_hook(
+    sha: Annotated[
+        str | None, typer.Option(help="Commit to recapture (default: HEAD, in the background).")
+    ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option(
+            help="Recovery: start the session window at this ISO time (e.g. 2026-10-01T11:30) "
+            "instead of the automatic one, capture and upload now. A time without an offset is "
+            "local time."
+        ),
+    ] = None,
+) -> None:
+    """Hook entry point: return immediately and capture in the background.
+
+    `rastro capture --sha <sha> --since <time>` recaptures a commit whose conversation fell
+    outside the automatic window (see `.rastro/capture.log`); the upload is idempotent.
+    """
+    if since is not None:
+        _recapture(sha, since)
+        return
     try:
         root = git.repo_root(Path.cwd())
         if load_config(root) is None:
             return
-        capture.spawn_background_capture(root, git.head_sha(root))
+        target = git.resolve_sha(root, sha) if sha else git.head_sha(root)
+        capture.spawn_background_capture(root, target)
     except Exception:  # never break the commit
         return
+
+
+def _recapture(sha: str | None, since: str) -> None:
+    try:
+        root = git.repo_root(Path.cwd())
+        full_sha = git.resolve_sha(root, sha or "HEAD")
+        start = datetime.fromisoformat(since)
+    except (git.GitError, ValueError) as error:
+        typer.echo(f"Cannot recapture: {error}", err=True)
+        raise typer.Exit(1) from None
+    if start.tzinfo is None:
+        start = start.astimezone()  # naive input means local time
+    if load_config(root) is None or load_token(root) is None:
+        typer.echo("Not configured: run `rastro init` first.", err=True)
+        raise typer.Exit(1)
+    projects = os.environ.get("RASTRO_CLAUDE_PROJECTS_DIR")
+    payloads = capture.collect_payloads(root, full_sha, Path(projects) if projects else None, start)
+    capture.write_pending(root, payloads)
+    sent, remaining = capture.flush_pending(root)
+    since_text = start.isoformat(timespec="seconds")
+    typer.echo(
+        f"{full_sha[:8]}: {len(payloads)} session(s) captured since {since_text}; "
+        f"sent {sent}, {remaining} still pending."
+    )
+    if not payloads:
+        raise typer.Exit(3)
 
 
 @app.command("capture-run", hidden=True)
