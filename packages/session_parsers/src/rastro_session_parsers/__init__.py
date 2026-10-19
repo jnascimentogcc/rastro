@@ -3,6 +3,7 @@ from rastro_session_parsers.claude_code import (
     MAX_EXCERPT_CHARS,
     default_projects_dir,
     default_window,
+    explain_no_edits,
     extract_session,
     find_session_files,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "ExcerptKind",
     "default_projects_dir",
     "default_window",
+    "explain_no_edits",
     "extract_session",
     "find_session_files",
     "redact",

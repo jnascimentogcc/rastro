@@ -34,7 +34,9 @@ rastro flush                                    # resend captures that could not
 
 The token goes to the system keychain (or `RASTRO_TOKEN` on headless machines), never to `.rastro/config.json`.
 Captures wait in `.rastro/pending/` (git-ignored through `.git/info/exclude`) until the upload succeeds;
-failures are logged to `.rastro/capture.log`.
+failures are logged to `.rastro/capture.log`, and so is a commit for which a session file exists but nothing was captured
+(with the time window and the reason). Edits made through Claude Code's Edit/Write/MultiEdit tools are recognised, as are Bash
+commands that write a changed file (`sed -i`, `tee`, `>`, `mv`, `git apply`, scripts calling `write_text`...); the command text is never uploaded.
 
 ## Running with Docker
 

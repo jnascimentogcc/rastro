@@ -26,6 +26,8 @@ MAX_NOTE_CHARS = 2_000
 _EDIT_TOOLS = {"Edit": "file_path", "MultiEdit": "file_path", "Write": "file_path"} | {
     "NotebookEdit": "notebook_path"
 }
+MAX_BASH_SCAN_CHARS = 20_000
+
 _NON_INTENT_PREFIXES = (
     "<command-",
     "<local-command",
@@ -207,6 +209,77 @@ def _intent_row(session: _Session, edit_row: dict[str, Any]) -> dict[str, Any] |
     return None
 
 
+# --------------------------------------------------------------------------- bash edits
+
+_SEGMENT_SPLIT = re.compile(r"&&|\|\||[;|\n]")
+_TOKEN_NOISE = str.maketrans({c: " " for c in "'\"`(){}[],="})
+_REDIRECT = re.compile(r"(?<![0-9&<>])>>?\s*([^\s;&|<>]+)")
+_SED_IN_PLACE = re.compile(r"(?:^|\s)sed\s(?:[^|;&\n]*\s)?(?:-[A-Za-z]*i|--in-place)")
+_PERL_IN_PLACE = re.compile(r"(?:^|\s)perl\s(?:[^|;&\n]*\s)?-[A-Za-z]*i")
+_INTERPRETER = re.compile(r"\b(?:python3?|py|node|deno|bun|ruby|php)\b")
+_INTERPRETER_WRITE = re.compile(
+    r"write_text|write_bytes|\.write\(|writeFile|appendFile|"
+    r"open\([^)]*,\s*['\"][wax]|Set-Content|Out-File"
+)
+_GIT_RESTORE = re.compile(r"\bgit\s+(?:checkout|restore)\b")
+_PATCHING = re.compile(r"\bgit\s+apply\b|(?:^|\s)patch\s")
+
+
+def _bash_paths(text: str, repo_root: str, cwd: str, changed: dict[str, str]) -> set[str]:
+    """Changed files named by path-like tokens of `text` (repo-relative or absolute, `a/` and
+    `b/` diff prefixes included)."""
+    found: set[str] = set()
+    for token in text.translate(_TOKEN_NOISE).split():
+        candidates = [token]
+        if token[:2] in ("a/", "b/"):
+            candidates.append(token[2:])
+        for candidate in candidates:
+            rel = _relative_to_root(candidate.rstrip(".:"), repo_root, cwd)
+            if rel and (canonical := changed.get(rel.lower())) is not None:
+                found.add(canonical)
+    return found
+
+
+def bash_written_files(command: str, repo_root: str, cwd: str, changed: dict[str, str]) -> set[str]:
+    """Changed files a Bash command probably writes. Deliberately conservative heuristic, text
+    only (the command is never executed or stored):
+
+    - `sed -i` / `perl -i` on the file, `tee [-a] file`, a redirection `> file` / `>> file`,
+      `mv` (either side), `cp` (destination, the last argument), `git checkout|restore` and
+      `git apply` / `patch` (the diff headers name the file) when the file is named;
+    - a `python`/`node`/... command that names the file and contains a write call
+      (`write_text`, `writeFileSync`, `open(..., 'w')`...).
+
+    Reads (`cat`, `grep`, `sed -n`, `git diff`) never count. Limits: files reached through
+    globs, variables, `cd` followed by a bare name, scripts that compute the path, or a patch
+    file that is only named by path are missed; a `sed -i` whose script (not its target)
+    mentions a changed path is a false positive."""
+    command = command[:MAX_BASH_SCAN_CHARS]
+    written: set[str] = set()
+    for match in _REDIRECT.finditer(command):
+        written |= _bash_paths(match.group(1), repo_root, cwd, changed)
+    for segment in _SEGMENT_SPLIT.split(command):
+        padded = f" {segment.strip()}"
+        words = segment.translate(_TOKEN_NOISE).split()
+        if not words:
+            continue
+        if (
+            _SED_IN_PLACE.search(padded)
+            or _PERL_IN_PLACE.search(padded)
+            or words[0] in ("tee", "mv")
+            or _GIT_RESTORE.search(padded)
+            or _PATCHING.search(padded)
+        ):
+            written |= _bash_paths(segment, repo_root, cwd, changed)
+        elif words[0] == "cp":
+            written |= _bash_paths(words[-1], repo_root, cwd, changed)
+    if _PATCHING.search(command) or (
+        _INTERPRETER.search(command) and _INTERPRETER_WRITE.search(command)
+    ):
+        written |= _bash_paths(command, repo_root, cwd, changed)
+    return written
+
+
 @dataclass(frozen=True)
 class _Edit:
     row: dict[str, Any]
@@ -233,15 +306,22 @@ def _linked_edits(
         if branch and isinstance(row_branch, str) and row_branch not in ("", "HEAD", branch):
             continue
         for block in _blocks(row):
-            field_name = (
-                _EDIT_TOOLS.get(str(block.get("name"))) if block.get("type") == "tool_use" else None
-            )
-            if field_name is None or not session.tool_ok.get(str(block.get("id")), False):
+            if block.get("type") != "tool_use" or not session.tool_ok.get(str(block.get("id"))):
+                continue
+            cwd = str(row.get("cwd") or "")
+            if block.get("name") == "Bash":
+                command = (block.get("input") or {}).get("command")
+                if isinstance(command, str):
+                    for written in sorted(bash_written_files(command, repo_root, cwd, changed)):
+                        edits.append(_Edit(row=row, tool="Bash", rel_path=written))
+                continue
+            field_name = _EDIT_TOOLS.get(str(block.get("name")))
+            if field_name is None:
                 continue
             raw = (block.get("input") or {}).get(field_name)
             if not isinstance(raw, str):
                 continue
-            rel = _relative_to_root(raw, repo_root, str(row.get("cwd") or ""))
+            rel = _relative_to_root(raw, repo_root, cwd)
             canonical = changed.get(rel.lower()) if rel else None
             if canonical is not None:
                 edits.append(_Edit(row=row, tool=str(block["name"]), rel_path=canonical))
@@ -333,6 +413,37 @@ def extract_session(
         agent_version=_last_str(session.rows, "version"),
         git_branch=_last_str([e.row for e in edits], "gitBranch"),
         excerpts=tuple(ordered),
+    )
+
+
+def explain_no_edits(
+    path: Path,
+    since: datetime,
+    until: datetime,
+    *,
+    branch: str | None = None,
+) -> str:
+    """Why `extract_session` found nothing, for the capture log: window activity only (tool
+    call counts by name), no content."""
+    session = _load(path)
+    tools: dict[str, int] = {}
+    for row in session.rows:
+        when = _parse_time(row.get("timestamp"))
+        if row.get("type") != "assistant" or when is None or not (since <= when <= until):
+            continue
+        row_branch = row.get("gitBranch")
+        if branch and isinstance(row_branch, str) and row_branch not in ("", "HEAD", branch):
+            continue
+        for block in _blocks(row):
+            if block.get("type") == "tool_use":
+                name = str(block.get("name"))[:40]
+                tools[name] = tools.get(name, 0) + 1
+    if not tools:
+        return "no assistant activity in the window (or on this branch)"
+    counts = ", ".join(f"{n} x{c}" for n, c in sorted(tools.items()))
+    return (
+        f"tool calls in the window ({counts}) but none edited the commit's files "
+        "(successful Edit/Write/MultiEdit, or Bash that writes them)"
     )
 
 
