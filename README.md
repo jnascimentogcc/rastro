@@ -90,7 +90,10 @@ tool's bin directory must be on the `PATH` git sees (`pipx ensurepath` / `uv too
      `npx smee-client --url https://smee.io/XXXX --target http://localhost:8000/webhooks/github`).
    - Webhook secret: a long random string (`python -c "import secrets; print(secrets.token_urlsafe(32))"`).
    - Repository permissions: Contents: read-only, Pull requests: read and write, Metadata: read-only.
-   - Subscribe to events: Push, Pull request (the `installation` events are always sent).
+   - Subscribe to events: Push, Pull request, **Issue comment** (phase 9.3: reviewing proposed rules
+     from GitHub; the `installation` events are always sent). If GitHub does not offer *Issue comment*
+     until the App has *Issues: read*, add that permission too, then accept the new permissions on the
+     installation page.
    - Where can this App be installed: only on your account.
 2. **Generate a private key** (App settings, "Private keys") and save the `.pem` under `secrets/`
    (git-ignored). Note the **App ID**.
@@ -251,6 +254,35 @@ the database (with its embedding and anchors) so that extraction does not propos
 excluded from searches, impact analysis and the default list. The reviewer is the `git config
 user.email` and is recorded as **not verified**: anyone holding the repository token could write
 another name. Verified identities arrive with the GitHub flow (phase 9.3).
+
+### Reviewing the proposals from GitHub (phase 9.3)
+
+Each proposal in the PR comment has a checkbox and a short id. Anyone with **write access** to the
+repository (checked against GitHub on every action; everybody else is ignored in silence) can:
+
+- tick the box to **confirm** it (untick to take it back);
+- `/rastro ok <id>`: same as the box (use it if the box does not reach Rastro, see below);
+- `/rastro reject <id>`: it is struck through and will not be proposed again;
+- `/rastro correct <id>: <new statement>`: replaces the text and counts as confirmed;
+- `/rastro why <id> <reason>`: adds the reason the conversation never gave (marked as written by you).
+
+The id is the first 4 or more characters shown next to the proposal; a wrong or ambiguous one gets a
+short answer. Reviewer text is capped at 500 characters, never sent to a model and escaped when shown
+again. Reviews change only the proposals and re-render the comment without calling the model; nothing
+reaches `rules` until phase 9.4 applies them at merge. The reviewer is the verified GitHub login of the
+event, unlike the CLI. **Not yet verified against a real App:** that ticking a box in a bot comment
+arrives as an `issue_comment` `edited` event with the right `sender`; if it does not, use `/rastro ok`.
+
+### What happens at merge (phase 9.4)
+
+When the PR is merged, each commit that was previewed lands **exactly as the reviewers saw it**,
+without calling the model again: unreviewed proposals become ordinary (unvalidated) rules; confirmed
+and corrected ones become rules validated by the GitHub login that reviewed them (with a
+`rule_reviews` entry, source `github`); a reason written by a person is kept as theirs; a rejected
+proposal is stored as a `rejected` rule so it is never proposed again, and a rejected *change* to an
+existing rule simply leaves that rule alone. A commit that was never previewed (or whose session
+arrived after the preview) is extracted the usual way. If the model account has no credit at merge
+time the reviews wait, intact, for `python -m rastro_worker.requeue`.
 
 ### Rule preview in the pull request (phase 9.2)
 

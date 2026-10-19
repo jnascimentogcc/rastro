@@ -46,3 +46,9 @@ class GitHubClient(Protocol):
     ) -> None:
         """Edit a comment in place. Raises CommentNotFoundError if it was deleted."""
         ...
+
+    async def get_collaborator_permission(
+        self, installation_id: int, full_name: str, login: str
+    ) -> str:
+        """What `login` may do on the repository: admin, maintain, write, triage, read or none."""
+        ...

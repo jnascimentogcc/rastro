@@ -34,7 +34,9 @@ Create a new App, separate from the development one (which keeps its smee webhoo
 - Webhook URL `https://rastro.karpaai.com/webhooks/github`; webhook secret: take it from the
   server's `.env` after the first `install.sh` run (`GITHUB_WEBHOOK_SECRET`), or generate one and
   put the same value in `.env`.
-- Same permissions and events as the development App (see README, "GitHub App setup").
+- Same permissions and events as the development App (see README, "GitHub App setup"), including
+  the **Issue comment** event used to review proposed rules from the pull request. An App created
+  before phase 9.3 has to subscribe to it (and accept the new permissions on the installation).
 - Generate a private key, note the App ID, install the App on the repositories.
 
 ## 3. Install

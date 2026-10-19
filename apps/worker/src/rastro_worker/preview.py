@@ -30,7 +30,10 @@ from rastro_worker.rule_extraction import Proposal, propose_rules
 
 logger = logging.getLogger(__name__)
 
-OPEN_STATES = ("pending", "superseded")  # the only states 9.2 produces; later phases add more
+OPEN_STATES = ("pending", "superseded")  # not reviewed by anybody: a new preview may replace them
+# What a reader of the PR comment sees: reviewed proposals stay (and keep their review) while the
+# commit is part of the PR; `superseded` ones are hidden.
+SHOWN_STATES = ("pending", "confirmed", "corrected", "rejected")
 
 
 @dataclass
@@ -44,6 +47,10 @@ class PreviewItem:
     replaces: str | None = None  # statement of the rule an update changes
     validated_by: str | None = None  # set when that rule had been confirmed by a human
     validated_at: datetime | None = None
+    state: str = "pending"  # pending | confirmed | corrected | rejected
+    reviewed_by: str | None = None  # GitHub login of whoever reviewed it
+    rationale_source: str | None = None  # conversation | human
+    rationale_by: str | None = None  # login, when a human wrote the reason
 
 
 @dataclass
@@ -135,7 +142,7 @@ async def refresh_preview(
         outcome.previewed += 1
 
     await _tidy(deps, repository.id, number, shas)
-    outcome.items = await _pending_items(deps, repository.id, number)
+    outcome.items = await load_review_items(deps, repository.id, number, shas)
     return outcome
 
 
@@ -163,6 +170,7 @@ async def _store(
                 "origin_quote": p.origin_quote,
                 "symbols": p.symbols,
                 "confidence": p.confidence,
+                "rationale_source": "conversation" if p.rationale else None,
             }
             for p in proposals
         }
@@ -175,8 +183,11 @@ async def _store(
                         "pr_number": statement.excluded.pr_number,
                         "confidence": statement.excluded.confidence,
                         "rationale": statement.excluded.rationale,
+                        "rationale_source": statement.excluded.rationale_source,
                         "state": "pending",
                     },
+                    # a proposal somebody already reviewed keeps their review and their text
+                    where=RuleProposal.state.in_(OPEN_STATES),
                 )
             )
         marker = insert(RulePreview).values(repository_id=repository_id, commit_sha=sha)
@@ -219,9 +230,12 @@ async def _tidy(deps: WorkerDeps, repository_id: uuid.UUID, number: int, shas: l
             row.state = "superseded" if later else "pending"
 
 
-async def _pending_items(
-    deps: WorkerDeps, repository_id: uuid.UUID, number: int
+async def load_review_items(
+    deps: WorkerDeps, repository_id: uuid.UUID, number: int, shas: list[str]
 ) -> list[PreviewItem]:
+    """The proposals the PR comment lists: pending and reviewed ones of the PR's current commits."""
+    if not shas:
+        return []
     async with deps.session_factory() as session:
         rows = (
             await session.execute(
@@ -230,7 +244,8 @@ async def _pending_items(
                 .where(
                     RuleProposal.repository_id == repository_id,
                     RuleProposal.pr_number == number,
-                    RuleProposal.state == "pending",
+                    RuleProposal.commit_sha.in_(shas),
+                    RuleProposal.state.in_(SHOWN_STATES),
                 )
                 .order_by(RuleProposal.created_at, RuleProposal.id)
             )
@@ -249,8 +264,13 @@ async def _pending_items(
                 replaces=rule.statement if rule is not None else None,
                 validated_by=rule.validated_by if validated and rule is not None else None,
                 validated_at=rule.validated_at if validated and rule is not None else None,
+                state=proposal.state,
+                reviewed_by=proposal.reviewed_by,
+                rationale_source=proposal.rationale_source,
+                rationale_by=proposal.rationale_by,
             )
         )
-    # Rules that overwrite something a human confirmed come first, then the most confident.
-    items.sort(key=lambda item: (item.validated_by is None, -item.confidence))
+    # Rejected ones last; then rules that overwrite something a human confirmed, then the most
+    # confident.
+    items.sort(key=lambda i: (i.state == "rejected", i.validated_by is None, -i.confidence))
     return items

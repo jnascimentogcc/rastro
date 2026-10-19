@@ -72,15 +72,15 @@ def item(n: int = 1, **overrides: object) -> PreviewItem:
     return PreviewItem(**(values | overrides))  # type: ignore[arg-type]
 
 
-def test_proposals_are_listed_without_actions_and_say_nothing_is_saved_yet() -> None:
+def test_proposals_are_listed_with_a_checkbox_and_say_nothing_is_saved_yet() -> None:
     body = render_comment([], proposals=[item(1)])
 
     assert body.startswith(MARKER + "\n### Rastro — rules this PR proposes")
     assert "Nothing is saved until the PR is merged." in body
-    assert "- **Rule number 1**" in body
+    assert "- [ ] **Rule number 1** <!-- rastro:proposal:k1 -->" in body
     assert "  Why: The doctor needs 48h of follow-up" in body
-    assert "  New rule · `src/agenda.ts::AgendaService.validate`" in body
-    assert "[ ]" not in body  # no checkbox: there is nothing to act on yet
+    assert "  New rule · `src/agenda.ts::AgendaService.validate` · id `k1`" in body
+    assert "Check a box to confirm a rule." in body and "`/rastro reject <id>`" in body
     assert "rules affected" not in body  # no impact section without findings
 
 
@@ -96,7 +96,7 @@ def test_only_five_are_visible_and_the_rest_are_collapsed() -> None:
     visible, collapsed = body.split("<details>")
     assert all(f"Rule number {n}**" in visible for n in range(1, 6))
     assert "Rule number 6" in collapsed and "Rule number 7" in collapsed
-    assert "<summary>2 more</summary>" in collapsed and collapsed.rstrip().endswith("</details>")
+    assert "<summary>2 more</summary>" in collapsed and "</details>" in collapsed
 
 
 def test_an_update_names_the_rule_it_changes_and_who_confirmed_it() -> None:

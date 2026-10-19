@@ -28,6 +28,7 @@ class FakeGitHub:
         self.comments: dict[int, str] = {}  # comment id -> body
         self.comment_targets: dict[int, int] = {}  # comment id -> pull request number
         self._next_comment_id = 1000
+        self.permissions: dict[tuple[str, str], str] = {}  # (repo, login) -> permission
 
     def add_repo(self, github_id: int, full_name: str, default_branch: str = "main") -> None:
         self._repos[full_name] = _Repo(RepoInfo(github_id, full_name, default_branch))
@@ -116,3 +117,11 @@ class FakeGitHub:
         if comment_id not in self.comments:
             raise CommentNotFoundError(str(comment_id))
         self.comments[comment_id] = body
+
+    def set_permission(self, full_name: str, login: str, permission: str) -> None:
+        self.permissions[(full_name, login.lower())] = permission
+
+    async def get_collaborator_permission(
+        self, installation_id: int, full_name: str, login: str
+    ) -> str:
+        return self.permissions.get((full_name, login.lower()), "none")

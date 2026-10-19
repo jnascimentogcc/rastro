@@ -48,7 +48,14 @@ from rastro_llm import (
     PromptSymbol,
     build_impact_prompt,
 )
-from rastro_worker.comment import Finding, render_all_clear, render_comment
+from rastro_worker.comment import (
+    Finding,
+    compose_comment,
+    render_all_clear_section,
+    render_impact_section,
+    render_notice,
+    render_proposals_section,
+)
 from rastro_worker.deps import WorkerDeps
 from rastro_worker.indexing import is_indexable
 from rastro_worker.preview import PreviewOutcome, refresh_preview
@@ -116,7 +123,9 @@ async def analyze_pull_request(
         # No impact analysis (it needs the model). The preview may still have cached proposals to
         # show, and says it cannot run for new commits; with neither there is no comment at all.
         preview = await _safe_preview(deps, llm, repository, number)
-        result = ImpactResult("skipped_budget", proposals=len(preview.items))
+        result = ImpactResult(
+            "skipped_budget", proposals=sum(1 for i in preview.items if i.state != "rejected")
+        )
         if preview.items or preview.unavailable:
             await _publish(deps, repository, number, head_sha, [], [], result, preview)
         return result
@@ -157,7 +166,7 @@ async def analyze_pull_request(
     )
     result.reported = len(reported)
     preview = await _safe_preview(deps, llm, repository, number)
-    result.proposals = len(preview.items)
+    result.proposals = sum(1 for i in preview.items if i.state != "rejected")
     await _publish(deps, repository, number, head_sha, assessments, reported, result, preview)
     return result
 
@@ -653,18 +662,19 @@ async def _publish(
     previously_flagged = bool(previous and any(f.get("reported") for f in previous.findings))
 
     comment_id = previous.comment_id if previous else None
-    if findings or preview.items or preview.unavailable:
-        body = render_comment(
-            findings,
-            language,
-            proposals=preview.items,
-            unavailable=preview.unavailable,
-            all_clear_sha=head_sha if previously_flagged else None,
-        )
+    # What the comment shows, part by part (kept so a review can re-render it without the model).
+    impact = render_impact_section(
+        findings, language, all_clear_sha=head_sha if previously_flagged else None
+    )
+    shown = [item for item in preview.items if item.state != "rejected"]
+    notice = render_notice(preview.unavailable, language)
+    if findings or shown or preview.items or preview.unavailable:
+        body = compose_comment(impact, render_proposals_section(preview.items, language), notice)
         comment_id = await _post_or_update(deps, repository, number, comment_id, body)
         result.commented = True
     elif comment_id is not None:  # a warning or a proposal was shown before and no longer applies
-        body = render_all_clear(head_sha, language, flagged=previously_flagged)
+        impact = render_all_clear_section(head_sha, language, flagged=previously_flagged)
+        body = compose_comment(impact, "", "")
         comment_id = await _post_or_update(deps, repository, number, comment_id, body)
         result.commented = True
     result.comment_id = comment_id
@@ -688,6 +698,8 @@ async def _publish(
             pr_number=number,
             head_sha=head_sha,
             comment_id=comment_id,
+            impact_markdown=impact,
+            preview_notice=preview.unavailable,
             findings=stored,
         )
         await session.execute(
@@ -696,6 +708,8 @@ async def _publish(
                 set_={
                     "head_sha": statement.excluded.head_sha,
                     "comment_id": statement.excluded.comment_id,
+                    "impact_markdown": statement.excluded.impact_markdown,
+                    "preview_notice": statement.excluded.preview_notice,
                     "findings": statement.excluded.findings,
                     "created_at": datetime.now(UTC),
                 },

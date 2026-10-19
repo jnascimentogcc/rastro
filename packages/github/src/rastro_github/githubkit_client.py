@@ -222,6 +222,20 @@ class GithubKitClient:
                 raise CommentNotFoundError(str(comment_id)) from error
             raise
 
+    async def get_collaborator_permission(
+        self, installation_id: int, full_name: str, login: str
+    ) -> str:
+        owner, name = self._split(full_name)
+        try:
+            response = await self._for(
+                installation_id
+            ).rest.repos.async_get_collaborator_permission_level(owner, name, login)
+        except RequestFailed as error:
+            if error.response.status_code in (403, 404):  # not a collaborator, or not a user
+                return "none"
+            raise
+        return str(response.parsed_data.permission)
+
 
 def _blobs(items: list[Any], *, prefix: str) -> list[FileEntry]:
     return [

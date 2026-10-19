@@ -243,7 +243,7 @@ async def test_the_pull_request_comment_lists_the_proposals_and_is_edited_in_pla
 
     assert (first.proposals, first.commented, first.reported) == (1, True, 0)
     [body] = worker.github.comments_on(NUMBER)
-    assert body.startswith(MARKER) and f"- **{FRIDAY}**" in body
+    assert body.startswith(MARKER) and f"- [ ] **{FRIDAY}**" in body
     assert "rules affected" not in body  # no impact finding, only the proposals
     assert second.comment_id == first.comment_id and len(worker.llm.calls) == calls
 
@@ -289,7 +289,7 @@ async def test_over_budget_keeps_showing_cached_proposals_and_says_the_rest_is_m
 
     assert result.status == "skipped_budget" and result.commented is True
     [body] = worker.github.comments_on(NUMBER)
-    assert f"- **{FRIDAY}**" in body  # what was already previewed stays visible
+    assert f"- [ ] **{FRIDAY}**" in body  # what was already previewed stays visible
     assert "monthly cost limit was reached" in body  # and the gap is not silent
 
 
