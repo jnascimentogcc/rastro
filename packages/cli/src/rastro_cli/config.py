@@ -29,6 +29,10 @@ def rejected_dir(root: Path) -> Path:
     return data_dir(root) / "rejected"
 
 
+def captured_path(root: Path) -> Path:
+    return data_dir(root) / "captured.json"
+
+
 def config_path(root: Path) -> Path:
     return data_dir(root) / "config.json"
 
