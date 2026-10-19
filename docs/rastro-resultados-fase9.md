@@ -18,6 +18,7 @@ Este relatório avalia; não deve servir, por si só, para alterar comportamento
 | Pedido B (PR #35) | **altera** uma regra existente: pré-pagamento a partir de 2 faltas consecutivas (antes 3). **Merge commit** |
 | Pedido C (PR #36) | **duas regras novas** num só commit, editadas **por shell**: máximo de 90 dias de antecedência (com razão) e máximo de 3 marcações ativas (**sem** razão). **Merge commit** |
 | Pedido D (PR #37) | repetir a regra dos 90 dias, já rejeitada, mudando só o nome da constante e a mensagem de erro. Serviu só para o teste |
+| Pedido E (PR #38) | repetição do passo 5 depois da correção #33: aplicar o limite dos 90 dias também à remarcação, para o modelo propor a regra reformulada |
 
 Em cada pedido, a regra e o porquê foram escritos pelo testador no chat com o Claude Code, como exige o
 Rastro (o porquê só é guardado se vier das palavras do utilizador).
@@ -42,7 +43,7 @@ Rastro (o porquê só é guardado se vier das palavras do utilizador).
 | Texto corrigido no merge | B | **ok**. `revision = 2`, `validated_revision = 2`; a validação antiga pela CLI (revisão 1) deixou de valer |
 | Squash **e** merge commit | A / B, C | **ok**, pelos SHAs originais dos commits |
 | Captura de uma sessão editada **por shell** (`sed -i`) | C | **ok** depois da correção #29 (108 excertos). Antes, falhava em silêncio (ver 4.1) |
-| A regra rejeitada **não volta** a ser proposta | D | **inconclusivo** (ver 4.7) |
+| A regra rejeitada **não volta** a ser proposta | D, E | D foi **inconclusivo** (o modelo não propôs nada); **ok no pedido E** depois da correção #33 (ver 4.7) |
 
 A pergunta que a spec deixava em aberto (**uma caixa marcada num comentário de um bot chega ao Rastro?**)
 fica respondida: sim, com `sender` e `changes.body.from` corretos.
@@ -77,7 +78,7 @@ não é guardado, e o `capture.log` diz agora porque não capturou nada quando a
 **Confirmado num caso real** no pedido C (edições por shell, 108 excertos capturados). É uma heurística
 conservadora: caminhos calculados, globs e variáveis continuam por detetar.
 
-### 4.2. A janela da captura pode excluir a conversa (aberto)
+### 4.2. A janela da captura pode excluir a conversa (corrigido em #34)
 
 A janela de uma sessão começa na data do committer do commit **anterior**. Num fluxo com squash merge, o
 commit anterior é o squash criado pelo GitHub, mais recente do que a conversa que o programador teve
@@ -113,13 +114,13 @@ falha se alguém voltar a subir sem verificar. Com a correção, 10 de 10 execu�
 construído com um `uv.lock` que tinha 0.26.0**, por isso tem o mesmo defeito: o deploy desta correção deve
 preceder qualquer uso do PROD em repositórios reais.
 
-### 4.6. Um worker que morre deixa o repositório bloqueado (aberto)
+### 4.6. Um worker que morre deixa o repositório bloqueado (corrigido em #35)
 
 Independentemente da causa, um job que fica em `doing` porque o worker morreu **não é recuperado**: bloqueia
 o repositório até alguém o marcar como falhado à mão (feito aqui com um `UPDATE` na tabela da fila). Falta
 recuperação de jobs órfãos (por exemplo, o mecanismo de heartbeat do Procrastinate).
 
-### 4.7. A supressão de regras rejeitadas falha nos dois sentidos (aberto)
+### 4.7. A supressão de regras rejeitadas falhava nos dois sentidos (corrigido em #33, confirmado)
 
 O pedido D (mudar só o nome da constante e a mensagem de erro da regra rejeitada) **não gerou nenhuma
 proposta**: o modelo tratou-o como refactor (uma chamada de extração com 42 tokens de saída e nenhuma chamada
@@ -140,8 +141,17 @@ variantes. O Rastro suprime a partir de 0,92:
 
 Falha em dois sentidos: a regra rejeitada **voltaria** quando o modelo a reformula (o caso normal), e quem
 rejeitou "90 dias" **nunca veria proposto** "60 dias". Um só limiar de embedding mede o estilo da frase e
-quase ignora números. Está proposta uma correção (limiar mais baixo mais exigência de que os números
-coincidam, mantendo a condição de ser nos mesmos símbolos), a executar numa sessão à parte.
+quase ignora números. A correção (#33) baixa o limiar para 0,72 e exige que os números coincidam, mantendo
+a condição de ser nos mesmos símbolos. Com ela, das variantes acima só "a mesma regra" (todas) é suprimida;
+"60 dias" (0,960), "3 marcações ativas" (0,571), "cancelar com 90 dias" (0,680, margem de só 0,04),
+"pontos de fidelidade 90 dias" (0,468) e "24 horas" (0,826) passam. Limite declarado: números escritos
+por extenso ("noventa dias", 0,966) não são comparados e não são suprimidos.
+
+**Confirmação com o modelo real (pedido E, PR #38).** Como a regra já estava no código, pediu-se que o
+limite valesse também para a remarcação. O modelo propôs a regra reformulada ("Ao remarcar, a nova data não
+pode estar a mais de 90 dias a partir de hoje, ...") e o worker descartou-a, com o registo "repeats
+rejected rule 2a785168...: dropped". A PR ficou sem proposta e sem comentário. Isto fecha o passo 5: a
+regra rejeitada não volta quando é reformulada, com os mesmos números e símbolos em comum.
 
 ### 4.8. Qualidade da extração (observações, não defeitos de código)
 
@@ -169,8 +179,7 @@ coincidam, mantendo a condição de ser nos mesmos símbolos), a executar numa s
 
 ## 5. Por testar
 
-1. A regra rejeitada **não voltar** com um modelo real a reformulá-la (depende da correção em 4.7; o teste
-   atual só cobre a frase igual).
+1. ~~A regra rejeitada não voltar com um modelo real~~: feito (pedido E, 4.7).
 2. O aviso "Changes a rule validated by…" na PR (validar a regra antes da pré-visualização).
 3. Que **quem não tem acesso de escrita** é ignorado: só testado com testes automáticos, porque o testador
    é administrador.
@@ -192,13 +201,12 @@ atribuída ao utilizador do GitHub e a razão humana marcada como tal. Os dois c
 merge commit) funcionaram.
 
 O teste encontrou, porém, cinco defeitos, dois deles graves e já corrigidos: a captura que ignorava edições
-por shell (#29) e o crash do `tree-sitter 0.26.0` (#31), ambos fora do desenho da Fase 9. Ficam abertos a
-janela da captura (4.2), a recuperação de jobs órfãos (4.6) e a supressão de regras rejeitadas (4.7), esta
-dentro do desenho da fase e que hoje não cumpre o que promete. Recomenda-se, por esta ordem:
+por shell (#29) e o crash do `tree-sitter 0.26.0` (#31), ambos fora do desenho da Fase 9. A janela da captura (4.2, #34), a recuperação de jobs órfãos (4.6, #35) e a supressão de regras
+rejeitadas (4.7, #33) foram corrigidas depois do teste; a última foi confirmada com o modelo real. Recomenda-se, por esta ordem:
 
 1. fazer o **deploy em produção só depois** da #31 (o PROD tem o crash do tree-sitter) e das migrações 0008
    a 0010, com o evento *Issue comment* subscrito na `rastro-prod`;
-2. corrigir a supressão de regras rejeitadas (4.7) e repetir o passo 5 do roteiro com um modelo real;
+2. ~~corrigir a supressão de regras rejeitadas (4.7) e repetir o passo 5~~: feito (#33 e pedido E);
 3. recuperar jobs órfãos (4.6) e tornar a janela da captura mais robusta (4.2);
 4. fechar os testes por fazer da secção 5;
 5. rever o prompt de extração para não promover detalhe de implementação a regra (4.8).
