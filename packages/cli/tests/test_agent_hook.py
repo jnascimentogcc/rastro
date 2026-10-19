@@ -195,7 +195,9 @@ def test_the_hook_finds_the_root_from_a_subdirectory(root: Path) -> None:
 
 
 def test_a_bom_in_front_of_the_event_is_ignored(root: Path) -> None:
-    raw = b"ï»¿" + event(root, "Read", "src/agenda.ts")  # PowerShell 5.1 pipes a BOM
+    raw = chr(0xFEFF).encode("utf-8") + event(
+        root, "Read", "src/agenda.ts"
+    )  # PowerShell 5.1 pipes a BOM
 
     assert hook_entry.pre_tool(raw) is not None
 
