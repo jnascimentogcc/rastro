@@ -219,7 +219,9 @@ class RuleProposal(Base):
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     # pending | superseded (9.2); confirmed | corrected | rejected | applied come with 9.3/9.4
     state: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
-    reviewed_by: Mapped[str | None] = mapped_column(Text)
+    rationale_source: Mapped[str | None] = mapped_column(Text)  # conversation | human
+    rationale_by: Mapped[str | None] = mapped_column(Text)  # login, when a human wrote it
+    reviewed_by: Mapped[str | None] = mapped_column(Text)  # GitHub login of the last reviewer
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _now()
 
@@ -272,6 +274,10 @@ class PrAnalysis(Base):
     pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
     head_sha: Mapped[str] = mapped_column(Text, nullable=False)
     comment_id: Mapped[int | None] = mapped_column(BigInteger)
+    # What the PR comment showed besides the proposals, so a review can re-render the comment
+    # without calling the model again: the impact part (markdown) and the preview notice key.
+    impact_markdown: Mapped[str | None] = mapped_column(Text)
+    preview_notice: Mapped[str | None] = mapped_column(Text)
     findings: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = _now()
 

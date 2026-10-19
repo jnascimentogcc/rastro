@@ -7,7 +7,7 @@ from githubkit.exception import GitHubException, RequestFailed
 from sqlalchemy import select
 
 from rastro_db.models import Repository
-from rastro_worker import impact, indexing, merged_pr, resync, rule_extraction
+from rastro_worker import impact, indexing, merged_pr, resync, review, rule_extraction
 from rastro_worker.app import app
 from rastro_worker.deps import get_deps
 from rastro_worker.retry import retry_transient
@@ -133,3 +133,29 @@ async def pull_request_merged(
         await extract_rules.configure(lock=repository_id).defer_async(
             repository_id=repository_id, sha=sha
         )
+
+
+@app.task(name="apply_review", retry=retry_transient)
+@log_github_errors
+async def apply_review(
+    repository_id: str,
+    number: int,
+    comment_id: int,
+    sender: str,
+    event_action: str,
+    body: str,
+    previous_body: str = "",
+) -> None:
+    """A person ticked a box in Rastro's comment or wrote a `/rastro ...` command on a PR."""
+    if not await repository_is_active(repository_id):
+        return
+    await review.apply_review(
+        get_deps(),
+        uuid.UUID(repository_id),
+        number,
+        comment_id=comment_id,
+        sender=sender,
+        event_action=event_action,
+        body=body,
+        previous_body=previous_body,
+    )
