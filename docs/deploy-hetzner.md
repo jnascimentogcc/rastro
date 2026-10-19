@@ -84,6 +84,14 @@ push after installing the App triggers indexing (`index_repository`).
   OpenAI dashboard. After an empty balance or budget, `docker compose -f docker-compose.prod.yml exec worker python -m rastro_worker.requeue`.
 - **Monitoring:** point an external uptime monitor at `https://rastro.karpaai.com/health`; check
   failed jobs with `SELECT status, count(*) FROM procrastinate_jobs GROUP BY 1` in `rastro-db`.
+- **Crashed or killed worker:** workers write a heartbeat every 10 s; a periodic task
+  (`recover_stalled_jobs`, every minute) puts back the `doing` jobs of a worker silent for 120 s, so a
+  crash, OOM kill or deploy restart frees its repository by itself about two to three minutes later (look
+  for `was running on a worker that stopped sending heartbeats` in the worker log). A job that kills
+  its worker five times is marked `failed` (`giving up` in the log) so it cannot block the repository.
+  Last resort if a job is stuck in `doing` and nothing recovers it:
+  `UPDATE procrastinate_jobs SET status='failed' WHERE status='doing'` in `rastro-db` (use `'todo'` to
+  run it again). Knobs: `WORKER_HEARTBEAT_INTERVAL_SECONDS`, `WORKER_STALLED_TIMEOUT_SECONDS`, `JOB_MAX_ATTEMPTS`.
 - **Logs:** `docker compose -f docker-compose.prod.yml logs -f worker`.
 
 ## Privacy
