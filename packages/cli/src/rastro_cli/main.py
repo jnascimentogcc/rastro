@@ -9,7 +9,7 @@ from typing import Annotated
 import httpx
 import typer
 
-from rastro_cli import capture, client, git, render
+from rastro_cli import capture, client, git, render, rules_cache
 from rastro_cli.config import (
     DEFAULT_API_URL,
     Config,
@@ -251,6 +251,26 @@ def _repo_relative(value: str, root: Path) -> str | None:
         typer.echo(f"{value} is outside this repository.", err=True)
         raise typer.Exit(1) from None
     return None if relative == "." else relative
+
+
+@app.command("sync")
+def sync_command() -> None:
+    """Refresh the local copy of the repository's rules that the agent hook reads."""
+    root, config, token, repository_id = _api_context()
+    cached = rules_cache.load(root)
+    result = _call(
+        lambda: client.get_rules_snapshot(
+            token, config.api_url, repository_id, rules_cache.etag_of(cached)
+        )
+    )
+    if result is None:
+        typer.echo("The rules cache is up to date.")
+        return
+    snapshot, etag = result
+    rules_cache.save(root, snapshot, etag)
+    count = len(snapshot["rules"])
+    cut = " (the server cut the list: some rules are missing)" if snapshot.get("truncated") else ""
+    typer.echo(f"Rules cache updated: {count} rule{'s' if count != 1 else ''}{cut}.")
 
 
 @app.command("rules")

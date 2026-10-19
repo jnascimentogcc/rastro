@@ -245,6 +245,19 @@ rastro rules --limit 50 --json                 # raw server response
 rastro rule 4f3e2d1c                           # one rule: code anchors (primary/duplicate), review state and the commits behind it
 ```
 
+## Rules for the agent before it edits (phase 10, in progress)
+
+Step 10.1 is in place; the hook is not installed anywhere yet (that is 10.2), so nothing changes for
+an agent until then. `GET /v1/repos/{id}/rules/snapshot` returns every active rule with its active
+anchors (path and qualified name only, no quotes) and an `ETag` computed from the content, so a
+conditional request is answered with 304 only when nothing the agent would see has changed. `rastro
+sync` stores it in `.rastro/cache/rules.json` (owner-only, atomic). The entry point
+`python -m rastro_cli.hook_entry pre-tool` reads that file and, for a `Read` of a file with rules,
+answers with the rules as `additionalContext`; an `Edit`/`Write`/`MultiEdit` of a file not yet
+shown to that session or subagent is denied once with the same text. It is standard library only
+and exits 0 on any problem. See `docs/spec-fase-10-consulta-agente.md` and
+`docs/rastro-resultados-fase10.md`.
+
 ## Validating rules (phase 9.1)
 
 A human can say whether a rule is right. This is a separate fact from the model's confidence.

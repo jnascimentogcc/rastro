@@ -133,3 +133,33 @@ class RuleListOut(BaseModel):
     items: list[RuleOut]
     total: int
     search: Literal["semantic", "text"] | None
+
+
+class SnapshotAnchorOut(BaseModel):
+    """Where a rule lives: path and qualified name only (lines describe the default branch, which
+    the developer's checkout may not be on)."""
+
+    file_path: str
+    qualified_name: str
+    role: str  # primary | duplicate
+
+
+class SnapshotRuleOut(BaseModel):
+    id: uuid.UUID
+    statement: str
+    rationale: str | None
+    rationale_source: str | None = None
+    validation: Validation
+    revision: int
+    validated_by: str | None = None
+    validated_at: datetime | None = None
+    anchors: list[SnapshotAnchorOut]
+
+
+class RulesSnapshotOut(BaseModel):
+    """Every active rule of a repository in one compact payload, for the local agent cache."""
+
+    head_sha: str | None  # latest default-branch commit Rastro knows; the rules describe it
+    generated_at: datetime
+    truncated: bool
+    rules: list[SnapshotRuleOut]

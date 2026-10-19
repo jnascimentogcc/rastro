@@ -71,3 +71,19 @@ Leitura prudente: neste ficheiro de teste o modelo base já trata bem os pedidos
 ## 5. Como foi feito
 
 Hook de teste em Python (só biblioteca padrão), cache JSON de regras e projeto TypeScript minúsculo num diretório temporário; `claude -p ... --output-format stream-json --verbose --settings <ficheiro>`; o hook regista cada evento recebido (ferramenta, ficheiro, `session_id`, `agent_id`). Nota prática: o Claude Code embutido na app desktop está num pacote MSIX e o Windows redireciona-lhe o `AppData\Roaming`; a autenticação do `claude -p` foi feita com esse executável. Os scripts do spike não entram no repositório.
+
+
+## 6. Passo 10.1: snapshot, cache e entrada do hook
+
+Feito: rota `GET /v1/repos/{id}/rules/snapshot`, `rastro sync`, cache local `.rastro/cache/rules.json`, bloco de regras (`rules_block`) e a entrada `python -m rastro_cli.hook_entry pre-tool`. Ainda não está instalada em nenhum lado (instalador, `session-start` e registo de consultas são do 10.2).
+
+Decisões tomadas a partir do spike:
+
+- **O `ETag` hasheia o conteúdo servido**, não `contagem + max(updated_at)` como a spec previa. As âncoras mudam no `resync_anchors` e as validações nas revisões sem um `updated_at` fiável, e uma cache desatualizada falha em silêncio. Há um teste para a validação e para uma âncora que muda de ficheiro.
+- **A entrada do hook é independente da CLI**: só biblioteca padrão e, além disso, sem `pathlib`, `datetime`, `contextlib`, `typing` nem `tempfile` em tempo de importação (um teste verifica-o num processo à parte). Cada import custa dezenas de ms quando o Python arranca de raiz a cada ferramenta.
+- **O estado "informado" é por `(session_id, agent_id)`**, pelo que o spike mostrou sobre subagentes.
+- Só entram regras `active` **com pelo menos uma âncora ativa**; âncoras de símbolos removidos ficam de fora.
+
+Latência da entrada real (25 execuções, 100 a 5 000 regras): **o tamanho da cache continua a não contar**, e o custo acima do Python vazio é de ~20 ms no mínimo (~50–100 ms no p50). Em valor absoluto os números desta máquina variaram muito entre corridas (o `python -c pass` foi de 102 ms a 278 ms), por isso o orçamento de 150 ms só se confirma com a medição do 10.5 em condições estáveis.
+
+Teste de ponta a ponta com o Claude Code real (cache com uma regra **validada**, pedido vago de relaxar a regra): o modelo **não editou** e perguntou, citando a regra, quem a validou e o porquê. No spike, com o bloco de teste (regra sem validação nem a frase final do bloco), o modelo editou e só referiu o porquê no resumo. É uma só execução, mas sugere que o rótulo "validada por" e a frase "é uma decisão de negócio a mencionar ao utilizador" pesam; fica como hipótese para o 10.5.

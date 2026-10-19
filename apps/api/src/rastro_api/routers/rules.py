@@ -5,11 +5,14 @@ Authenticated with the repository token; the repository id in the URL must be th
 text match when it does not (or when the embedding call fails).
 """
 
+import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import ColumnElement, Float, and_, exists, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +25,9 @@ from rastro_api.schemas import (
     RuleDetailOut,
     RuleListOut,
     RuleOut,
+    RulesSnapshotOut,
+    SnapshotAnchorOut,
+    SnapshotRuleOut,
     Validation,
 )
 from rastro_db.budget import budget_exhausted
@@ -33,6 +39,7 @@ router = APIRouter(prefix="/v1/repos/{repo_id}/rules", tags=["rules"])
 
 MIN_SEMANTIC_SIMILARITY = 0.3  # cosine similarity below this is noise, not a match
 _LIKE_ESCAPE = "!"
+SNAPSHOT_MAX_RULES = 5_000  # beyond this the snapshot says `truncated` instead of growing
 
 
 def _own_repository(repo_id: uuid.UUID, repository_id: uuid.UUID) -> None:
@@ -138,6 +145,76 @@ async def list_rules(
     rows = (await session.execute(statement)).all()
     items = await _decorate(session, [(rule, score) for rule, score in rows])
     return RuleListOut(items=items, total=total, search=search)
+
+
+@router.get("/snapshot", response_model=RulesSnapshotOut)
+async def rules_snapshot(
+    repo_id: uuid.UUID,
+    request: Request,
+    repository: CurrentRepository,
+    session: DbSession,
+) -> Response:
+    """Every active rule with its active anchors, for the local cache read by the agent hook.
+
+    The ETag hashes the content served (not row counts or timestamps): anchors move on resync and
+    reviews change validation without always touching `rules.updated_at`, and a stale cache would
+    fail silently. `If-None-Match` answers 304.
+    """
+    _own_repository(repo_id, repository.id)
+    rows = (
+        await session.scalars(
+            select(Rule)
+            .where(Rule.repository_id == repository.id, Rule.status == "active")
+            .order_by(Rule.updated_at.desc(), Rule.id)
+            .limit(SNAPSHOT_MAX_RULES + 1)
+        )
+    ).all()
+    truncated = len(rows) > SNAPSHOT_MAX_RULES
+    rules = list(rows[:SNAPSHOT_MAX_RULES])
+
+    anchors: dict[uuid.UUID, list[SnapshotAnchorOut]] = {}
+    anchor_rows = await session.execute(
+        select(RuleAnchor.rule_id, SymbolRow.file_path, SymbolRow.qualified_name, RuleAnchor.role)
+        .join(SymbolRow, SymbolRow.id == RuleAnchor.symbol_id)
+        .where(RuleAnchor.rule_id.in_([rule.id for rule in rules]), SymbolRow.status == "active")
+        .order_by(RuleAnchor.role.desc(), SymbolRow.file_path, SymbolRow.qualified_name)
+    )  # primary first
+    for rule_id, file_path, qualified_name, role in anchor_rows:
+        anchors.setdefault(rule_id, []).append(
+            SnapshotAnchorOut(file_path=file_path, qualified_name=qualified_name, role=role)
+        )
+
+    head_sha = await session.scalar(
+        select(Commit.sha)
+        .where(Commit.repository_id == repository.id, Commit.on_default_branch.is_(True))
+        .order_by(Commit.committed_at.desc().nulls_last())
+        .limit(1)
+    )
+    items = [
+        SnapshotRuleOut(
+            id=rule.id,
+            statement=rule.statement,
+            rationale=rule.rationale,
+            rationale_source=rule.rationale_source,
+            validation=_validation(rule),
+            revision=rule.revision,
+            validated_by=rule.validated_by if _validation(rule) == "validated" else None,
+            validated_at=rule.validated_at if _validation(rule) == "validated" else None,
+            anchors=anchors[rule.id],
+        )
+        for rule in rules
+        if rule.id in anchors  # a rule with no active anchor cannot advise on any file
+    ]
+    body = RulesSnapshotOut(
+        head_sha=head_sha, generated_at=datetime.now(UTC), truncated=truncated, rules=items
+    )
+    content = body.model_dump(mode="json")
+    stable = {key: value for key, value in content.items() if key != "generated_at"}
+    digest = hashlib.sha256(json.dumps(stable, sort_keys=True).encode()).hexdigest()[:32]
+    etag = f'"{digest}"'
+    if etag in {tag.strip() for tag in request.headers.get("if-none-match", "").split(",")}:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+    return JSONResponse(content, headers={"ETag": etag})
 
 
 @router.get("/{rule_id}", response_model=RuleDetailOut)
