@@ -208,20 +208,13 @@ async def extract_rules(
         ids = await ensure_symbols(session, repository_id, sha, analyses)
         existing, nearby = await _existing_rules(session, repository_id, ids, touched)
 
-    context = ExtractionContext(
-        commit_message=(commit.message if commit and commit.message else ""),
-        excerpts=_prompt_excerpts(sessions),
-        diffs=[
-            PromptFileDiff(c.path, c.patch)
-            for c in changes
-            if c.patch and c.status != "removed" and not _NOISE_FILES.search(c.path)
-        ],
-        symbols=[
-            PromptSymbol(_key(path, s.qualified_name), s.kind, symbol_source(sources[path], s))
-            for path, symbols in touched.items()
-            for s in symbols
-        ],
-        existing_rules=existing,
+    context = _extraction_context(
+        commit.message if commit and commit.message else "",
+        sessions,
+        changes,
+        touched,
+        sources,
+        existing,
     )
     try:
         extraction = await _ask_model(
@@ -260,6 +253,122 @@ async def extract_rules(
 
 
 # --------------------------------------------------------------------------- helpers
+
+
+def _extraction_context(
+    commit_message: str,
+    sessions: list[AgentSession],
+    changes: list[ChangedFile],
+    touched: dict[str, list[Symbol]],
+    sources: dict[str, str],
+    existing: list[PromptRule],
+) -> ExtractionContext:
+    return ExtractionContext(
+        commit_message=commit_message,
+        excerpts=_prompt_excerpts(sessions),
+        diffs=[
+            PromptFileDiff(c.path, c.patch)
+            for c in changes
+            if c.patch and c.status != "removed" and not _NOISE_FILES.search(c.path)
+        ],
+        symbols=[
+            PromptSymbol(_key(path, s.qualified_name), s.kind, symbol_source(sources[path], s))
+            for path, symbols in touched.items()
+            for s in symbols
+        ],
+        existing_rules=existing,
+    )
+
+
+@dataclass
+class Proposal:
+    """A rule the model would add or update for a commit, validated but not stored."""
+
+    action: str  # create | update
+    existing_rule_id: uuid.UUID | None
+    statement: str
+    rationale: str | None
+    origin_quote: str | None
+    symbols: list[str]  # path::qualified.name
+    confidence: float
+
+
+async def propose_rules(
+    deps: WorkerDeps,
+    llm: LLMProvider,
+    repository: Repository,
+    sha: str,
+    sessions: list[AgentSession],
+    commit_message: str = "",
+) -> list[Proposal] | None:
+    """The extraction up to, but not including, writing: what this commit would teach Rastro.
+
+    Same protections as the real extraction (symbols and ids must have been in the prompt, minimum
+    confidence, grounded rationale, verbatim quote, no restated rule, rejected rules not brought
+    back). Nothing is written, not even symbols, so it is safe for commits that are not on the
+    default branch. Returns None when the model failed; raises `LLMQuotaError` without credit.
+    """
+    changes = await deps.github.get_commit_files(
+        repository.installation_id, repository.full_name, sha
+    )
+    _, touched, sources = await _analyze_changes(deps, repository, changes)
+    if not touched:
+        return []
+    async with deps.session_factory() as session:
+        ids = await _known_symbol_ids(session, repository.id, touched)
+        existing, nearby = await _existing_rules(session, repository.id, ids, touched)
+    context = _extraction_context(commit_message, sessions, changes, touched, sources, existing)
+    extraction = await _ask_model(
+        llm,
+        build_extraction_prompt(context),
+        {"repository_id": str(repository.id), "sha": sha},
+    )
+    if extraction is None:
+        return None
+
+    key_to_symbol = {
+        _key(path, s.qualified_name): (path, s)
+        for path, symbols in touched.items()
+        for s in symbols
+    }
+    accepted, _, _ = _validate(extraction, sessions, set(key_to_symbol), existing)
+    if not accepted:
+        return []
+    vectors = await llm.embed(
+        [a.rule.statement for a in accepted],
+        metadata={"repository_id": str(repository.id), "sha": sha},
+    )
+    await _reject_unrelated_updates(deps, accepted, vectors, nearby)
+    accepted, _, _ = await _drop_rejected_repeats(
+        deps, repository.id, accepted, vectors, key_to_symbol, ids
+    )
+    return [
+        Proposal(
+            action="create" if a.existing_id is None else "update",
+            existing_rule_id=a.existing_id,
+            statement=a.rule.statement.strip(),
+            rationale=a.rationale,
+            origin_quote=a.quote,
+            symbols=a.symbols,
+            confidence=a.rule.confidence,
+        )
+        for a in accepted
+    ]
+
+
+async def _known_symbol_ids(
+    session: AsyncSession, repository_id: uuid.UUID, touched: dict[str, list[Symbol]]
+) -> dict[tuple[str, str], uuid.UUID]:
+    """Ids of the touched symbols that already exist, without creating any."""
+    rows = await session.execute(
+        select(SymbolRow.file_path, SymbolRow.qualified_name, SymbolRow.id).where(
+            SymbolRow.repository_id == repository_id,
+            SymbolRow.status == "active",
+            SymbolRow.file_path.in_(list(touched)),
+        )
+    )
+    wanted = {(path, s.qualified_name) for path, symbols in touched.items() for s in symbols}
+    return {(path, name): symbol_id for path, name, symbol_id in rows if (path, name) in wanted}
 
 
 async def _set_status(deps: WorkerDeps, repository_id: uuid.UUID, sha: str, status: str) -> None:
@@ -643,19 +752,22 @@ async def _drop_rejected_repeats(
                 symbol_ids = {
                     ids[(key_to_symbol[k][0], key_to_symbol[k][1].qualified_name)]
                     for k in item.symbols
+                    if (key_to_symbol[k][0], key_to_symbol[k][1].qualified_name) in ids
                 }
-                repeated = await session.scalar(
-                    select(Rule.id)
-                    .join(RuleAnchor, RuleAnchor.rule_id == Rule.id)
-                    .where(
-                        Rule.repository_id == repository_id,
-                        Rule.status == "rejected",
-                        Rule.embedding.is_not(None),
-                        Rule.embedding.cosine_distance(vector) <= 1 - REJECTED_SIMILARITY,
-                        RuleAnchor.symbol_id.in_(symbol_ids),
+                repeated = None
+                if symbol_ids:  # a symbol with no row cannot carry a rejected rule
+                    repeated = await session.scalar(
+                        select(Rule.id)
+                        .join(RuleAnchor, RuleAnchor.rule_id == Rule.id)
+                        .where(
+                            Rule.repository_id == repository_id,
+                            Rule.status == "rejected",
+                            Rule.embedding.is_not(None),
+                            Rule.embedding.cosine_distance(vector) <= 1 - REJECTED_SIMILARITY,
+                            RuleAnchor.symbol_id.in_(symbol_ids),
+                        )
+                        .limit(1)
                     )
-                    .limit(1)
-                )
                 if repeated is not None:
                     logger.info(
                         "rule %r repeats rejected rule %s: dropped", item.rule.statement, repeated

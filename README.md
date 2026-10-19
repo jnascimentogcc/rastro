@@ -250,7 +250,17 @@ statement or reason, the revision rises and the rule is unvalidated again. A rej
 the database (with its embedding and anchors) so that extraction does not propose it again; it is
 excluded from searches, impact analysis and the default list. The reviewer is the `git config
 user.email` and is recorded as **not verified**: anyone holding the repository token could write
-another name. Verified identities arrive with the GitHub flow (phase 9.3). Spec:
+another name. Verified identities arrive with the GitHub flow (phase 9.3).
+
+### Rule preview in the pull request (phase 9.2)
+
+The single PR comment gets a second section, "rules this PR proposes", read from the sessions of the
+PR's commits **before** the merge. Nothing is stored in `rules` until the PR is merged; if it never
+is, the knowledge base is untouched. Each commit is previewed once (a push only pays for new
+commits), at most 5 proposals are shown (the rest are collapsed), and when the monthly token budget
+is spent or the model account has no credit the comment says the preview is unavailable instead of
+staying silent. It is shown in public repositories as well, and it shows the reason (never the
+original quote), so mind that when the conversations behind a public repository are private. Spec:
 `docs/spec-fase-9-validacao-humana.md`.
 
 A rule whose conversation never said why shows "unknown origin" instead of a guessed reason.
