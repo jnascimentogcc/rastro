@@ -169,7 +169,11 @@ async def test_invalid_reviews_are_rejected(api: ApiContext, body: dict[str, Any
 
     assert response.status_code == 422
     async with create_session_factory(api.engine)() as session:
-        assert (await session.scalars(select(RuleReview))).all() == []
+        mine = select(RuleReview).join(Rule, Rule.id == RuleReview.rule_id)
+        # only this test's repository: a shared dev database may hold other reviews
+        assert (
+            await session.scalars(mine.where(Rule.repository_id == api.repository_id))
+        ).all() == []
 
 
 async def test_reviews_are_limited_to_the_own_repository_and_need_the_token(
