@@ -252,7 +252,9 @@ rastro rule 4f3e2d1c --reject --note "not a real rule"
 
 A confirmation holds for one *revision* of the rule: when an extraction or a correction changes its
 statement or reason, the revision rises and the rule is unvalidated again. A rejected rule stays in
-the database (with its embedding and anchors) so that extraction does not propose it again; it is
+the database (with its embedding and anchors) so that extraction does not propose it again (a reworded version is recognised; the same wording
+with another number, such as 60 instead of 90 days, is a new rule; numbers written as words are not
+compared); it is
 excluded from searches, impact analysis and the default list. The reviewer is the `git config
 user.email` and is recorded as **not verified**: anyone holding the repository token could write
 another name. Verified identities arrive with the GitHub flow (phase 9.3).

@@ -805,3 +805,72 @@ async def test_a_different_rule_on_the_same_symbol_is_not_blocked_by_a_rejection
     summary = await extract_rules(worker.deps, worker.repository_id, SHA2)
 
     assert (summary.created, summary.suppressed) == (1, 0)
+
+
+DAYS_90 = "A booking can be made at most 90 days ahead, otherwise it is refused with a clear error"
+OTHER = "src/other.ts"
+OTHER_SOURCE = "export function other(): number {\n  return 1;\n}\n"
+ANCHOR = {(AGENDA, "AgendaService.validate"): "primary"}
+
+
+async def reject_rule(
+    worker: WorkerContext,
+    statement: str,
+    *,
+    like: str,
+    anchors: dict[tuple[str, str], str] | None = None,
+) -> None:
+    """A rejected rule whose stored text is `statement` but whose embedding is that of `like`."""
+    worker.github.set_tree(
+        worker.full_name, SHA1, {AGENDA: BEFORE, OTHER: OTHER_SOURCE}, head_of="main"
+    )
+    await index_repository(worker.deps, worker.repository_id)
+    await worker.add_rule(
+        statement,
+        anchors or ANCHOR,
+        status="rejected",
+        embedding=hashing_embedding(like, 1024),
+    )
+
+
+async def proposed_after_rejection(
+    worker: WorkerContext,
+    proposal: str,
+    *,
+    rejected: str,
+    anchors: dict[tuple[str, str], str] | None = None,
+    like: str | None = None,
+) -> int:
+    """How many rules the extraction of the proposal suppresses, given a rejected rule."""
+    await reject_rule(worker, rejected, like=like or proposal, anchors=anchors)
+    await stage_friday_commit(worker)
+    worker.llm.queue(
+        RuleExtraction(rules=[rule(statement=proposal, rationale=None, origin_quote=None)])
+    )
+    return (await extract_rules(worker.deps, worker.repository_id, SHA2)).suppressed
+
+
+async def test_the_same_rule_reworded_is_not_proposed_again(worker: WorkerContext) -> None:
+    reworded = "A booking cannot be made more than 90 days ahead; it is refused with a clear error"
+
+    assert await proposed_after_rejection(worker, reworded, rejected=DAYS_90) == 1
+
+
+async def test_the_same_wording_with_another_number_is_a_new_rule(worker: WorkerContext) -> None:
+    sixty = DAYS_90.replace("90", "60")
+
+    assert await proposed_after_rejection(worker, sixty, rejected=DAYS_90) == 0
+
+
+async def test_an_unrelated_rule_is_not_blocked_by_a_rejection(worker: WorkerContext) -> None:
+    assert await proposed_after_rejection(worker, FRIDAY_RULE, rejected=DAYS_90, like=DAYS_90) == 0
+
+
+async def test_a_rejection_on_other_symbols_does_not_block_the_rule(worker: WorkerContext) -> None:
+    reworded = "A booking cannot be made more than 90 days ahead; it is refused with a clear error"
+    other = {(OTHER, "other"): "primary"}
+
+    assert await proposed_after_rejection(worker, reworded, rejected=DAYS_90, anchors=other) == 0
+
+
+FRIDAY_RULE = "Implants cannot be booked on Friday afternoon"
