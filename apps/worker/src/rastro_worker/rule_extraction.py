@@ -31,6 +31,9 @@ from rastro_db.models import (
     Rule,
     RuleAnchor,
     RuleOrigin,
+    RulePreview,
+    RuleProposal,
+    RuleReview,
     SymbolCall,
 )
 from rastro_db.models import Symbol as SymbolRow
@@ -59,6 +62,8 @@ DUPLICATE_SIMILARITY = 0.92
 DUPLICATE_MIN_LINES = 3
 NEARBY_RULES_LIMIT = 6  # rules of neighbouring code offered to the model besides the direct ones
 NEARBY_UPDATE_MIN_SIMILARITY = 0.6  # an "update" of a nearby rule must still resemble it
+# Proposal states that still have to be applied when the PR is merged (phase 9.4).
+APPLICABLE_STATES = ("pending", "confirmed", "corrected", "rejected")
 REJECTED_SIMILARITY = 0.92  # a new rule this close to a rejected one, on its symbols, is dropped
 SYMBOL_EMBEDDING_CHARS = 2_000
 ATTEMPTS = 2
@@ -74,6 +79,9 @@ class ExtractionSummary:
     discarded: int = 0
     unchanged: int = 0  # updates that would change nothing (typically refactors)
     suppressed: int = 0  # new rules that repeat one a human rejected
+    from_preview: bool = False  # applied from the PR preview: no extraction call to the model
+    remembered: int = 0  # rejected proposals stored as memory (status `rejected`)
+    validated: int = 0  # rules a human had confirmed or corrected in the PR
     duplicates_linked: int = 0
     rule_ids: list[uuid.UUID] = field(default_factory=list)
 
@@ -208,37 +216,47 @@ async def extract_rules(
         ids = await ensure_symbols(session, repository_id, sha, analyses)
         existing, nearby = await _existing_rules(session, repository_id, ids, touched)
 
-    context = _extraction_context(
-        commit.message if commit and commit.message else "",
-        sessions,
-        changes,
-        touched,
-        sources,
-        existing,
-    )
+    # A PR preview already ran for this commit: apply what it stored (with the reviews people made
+    # in GitHub) instead of asking the model again, so the text a reviewer saw is the text that lands.
+    stored = await _stored_proposals(deps, repository_id, sha, sessions)
     try:
-        extraction = await _ask_model(
-            llm, build_extraction_prompt(context), {"repository_id": str(repository_id), "sha": sha}
-        )
-        if extraction is None:
-            await _set_status(deps, repository_id, sha, "analysis_failed")
-            return ExtractionSummary("analysis_failed")
+        if stored is not None:
+            summary = await _apply_stored(
+                deps, llm, repository_id, sha, sessions, stored, ids, touched, sources
+            )
+        else:
+            context = _extraction_context(
+                commit.message if commit and commit.message else "",
+                sessions,
+                changes,
+                touched,
+                sources,
+                existing,
+            )
+            extraction = await _ask_model(
+                llm,
+                build_extraction_prompt(context),
+                {"repository_id": str(repository_id), "sha": sha},
+            )
+            if extraction is None:
+                await _set_status(deps, repository_id, sha, "analysis_failed")
+                return ExtractionSummary("analysis_failed")
 
-        # Embeddings are requested before anything is written, so a quota error here leaves the
-        # database untouched.
-        summary = await _apply(
-            deps,
-            llm,
-            repository_id,
-            sha,
-            sessions,
-            extraction,
-            ids,
-            touched,
-            sources,
-            existing,
-            nearby,
-        )
+            # Embeddings are requested before anything is written, so a quota error here leaves
+            # the database untouched.
+            summary = await _apply(
+                deps,
+                llm,
+                repository_id,
+                sha,
+                sessions,
+                extraction,
+                ids,
+                touched,
+                sources,
+                existing,
+                nearby,
+            )
     except LLMQuotaError as error:
         logger.error(
             "rule extraction for commit %s skipped: the LLM account has no credit left (%s). "
@@ -538,6 +556,20 @@ class _Accepted:
     quote: str | None
     session_id: uuid.UUID | None
     existing_id: uuid.UUID | None
+    rationale_source: str = "conversation"  # conversation | human
+    status: str = "active"  # `rejected`: a reviewer said no; stored only as memory
+    review: "_Review | None" = None
+
+
+@dataclass
+class _Review:
+    """What people decided about a proposal in the pull request."""
+
+    state: str  # pending | confirmed | corrected | rejected
+    reviewer: str | None
+    reviewed_at: datetime | None
+    pr_number: int | None
+    rationale_by: str | None  # set when a person wrote the reason
 
 
 def _validate(
@@ -617,24 +649,64 @@ async def _apply(
     existing: list[PromptRule],
     nearby: set[str] | None = None,
 ) -> ExtractionSummary:
-    key_to_symbol: dict[str, tuple[str, Symbol]] = {
+    key_to_symbol = _symbol_keys(touched)
+    accepted, discarded, unchanged = _validate(extraction, sessions, set(key_to_symbol), existing)
+    summary = ExtractionSummary("analyzed", discarded=discarded, unchanged=unchanged)
+    return await _apply_accepted(
+        deps,
+        llm,
+        repository_id,
+        sha,
+        accepted,
+        ids,
+        key_to_symbol,
+        sources,
+        summary,
+        nearby=nearby or set(),
+        guards=True,
+    )
+
+
+def _symbol_keys(touched: dict[str, list[Symbol]]) -> dict[str, tuple[str, Symbol]]:
+    return {
         _key(path, s.qualified_name): (path, s)
         for path, symbols in touched.items()
         for s in symbols
     }
-    accepted, discarded, unchanged = _validate(extraction, sessions, set(key_to_symbol), existing)
-    summary = ExtractionSummary("analyzed", discarded=discarded, unchanged=unchanged)
+
+
+async def _apply_accepted(
+    deps: WorkerDeps,
+    llm: LLMProvider,
+    repository_id: uuid.UUID,
+    sha: str,
+    accepted: list[_Accepted],
+    ids: dict[tuple[str, str], uuid.UUID],
+    key_to_symbol: dict[str, tuple[str, Symbol]],
+    sources: dict[str, str],
+    summary: ExtractionSummary,
+    *,
+    nearby: set[str],
+    guards: bool,
+    consumed: list[uuid.UUID] | None = None,
+) -> ExtractionSummary:
+    """Embed and store validated rules. `guards` re-checks them against the stored graph (nearby
+    rules, rejected rules); rules coming from reviewed proposals skip that, because the guards
+    already ran when they were previewed and people have looked at them since. `consumed` are the
+    proposals this call applies; they are marked `applied` in the same transaction as the rules."""
     if not accepted:
+        await _mark_applied(deps, consumed or [])
         return summary
 
     metadata = {"repository_id": str(repository_id), "sha": sha}
     statement_vectors = await llm.embed([a.rule.statement for a in accepted], metadata=metadata)
-    await _reject_unrelated_updates(deps, accepted, statement_vectors, nearby or set())
-    accepted, statement_vectors, summary.suppressed = await _drop_rejected_repeats(
-        deps, repository_id, accepted, statement_vectors, key_to_symbol, ids
-    )
-    if not accepted:
-        return summary
+    if guards:
+        await _reject_unrelated_updates(deps, accepted, statement_vectors, nearby)
+        accepted, statement_vectors, summary.suppressed = await _drop_rejected_repeats(
+            deps, repository_id, accepted, statement_vectors, key_to_symbol, ids
+        )
+        if not accepted:
+            return summary
     anchored_keys = sorted({k for a in accepted for k in a.symbols})
     symbol_vectors = dict(
         zip(
@@ -663,7 +735,9 @@ async def _apply(
         for item, vector in zip(accepted, statement_vectors, strict=True):
             rule_id = await _store_rule(session, repository_id, sha, item, vector)
             summary.rule_ids.append(rule_id)
-            if item.existing_id is None:
+            if item.status == "rejected":
+                summary.remembered += 1
+            elif item.existing_id is None:
                 summary.created += 1
             else:
                 summary.updated += 1
@@ -680,20 +754,230 @@ async def _apply(
                         index_elements=["rule_id", "symbol_id"], set_={"role": "primary"}
                     )
                 )
-            summary.duplicates_linked += await _link_duplicates(
-                session,
-                repository_id,
-                rule_id,
-                [
-                    (
-                        ids[key_to_symbol[k][0], key_to_symbol[k][1].qualified_name],
-                        key_to_symbol[k][1].body_hash,
-                        symbol_vectors[k],
-                    )
-                    for k in item.symbols
-                ],
+            if item.status != "rejected":  # a remembered rule needs no copies of its code
+                summary.duplicates_linked += await _link_duplicates(
+                    session,
+                    repository_id,
+                    rule_id,
+                    [
+                        (
+                            ids[key_to_symbol[k][0], key_to_symbol[k][1].qualified_name],
+                            key_to_symbol[k][1].body_hash,
+                            symbol_vectors[k],
+                        )
+                        for k in item.symbols
+                    ],
+                )
+            if item.review is not None and await _record_review(
+                session, repository_id, rule_id, sha, item
+            ):
+                summary.validated += 1
+        if consumed:
+            await session.execute(
+                update(RuleProposal).where(RuleProposal.id.in_(consumed)).values(state="applied")
             )
     return summary
+
+
+async def _mark_applied(deps: WorkerDeps, proposal_ids: list[uuid.UUID]) -> None:
+    if not proposal_ids:
+        return
+    async with deps.session_factory() as session, session.begin():
+        await session.execute(
+            update(RuleProposal).where(RuleProposal.id.in_(proposal_ids)).values(state="applied")
+        )
+
+
+# --------------------------------------------------------------------------- reviewed proposals
+
+
+async def _stored_proposals(
+    deps: WorkerDeps, repository_id: uuid.UUID, sha: str, sessions: list[AgentSession]
+) -> list[RuleProposal] | None:
+    """The PR preview of this commit, when it is still valid: None means "ask the model".
+
+    The preview is stale when a session arrived after it ran (the same rule the preview cache
+    uses); a commit that was never previewed (a PR from before phase 9.2, no session at the time)
+    takes the normal path. An empty list means the preview ran and found nothing."""
+    async with deps.session_factory() as session:
+        previewed_at = await session.scalar(
+            select(RulePreview.previewed_at).where(
+                RulePreview.repository_id == repository_id, RulePreview.commit_sha == sha
+            )
+        )
+        if previewed_at is None or any(s.captured_at > previewed_at for s in sessions):
+            return None
+        return list(
+            await session.scalars(
+                select(RuleProposal)
+                .where(
+                    RuleProposal.repository_id == repository_id,
+                    RuleProposal.commit_sha == sha,
+                    RuleProposal.state.in_(APPLICABLE_STATES),
+                )
+                .order_by(RuleProposal.created_at, RuleProposal.id)
+            )
+        )
+
+
+async def _apply_stored(
+    deps: WorkerDeps,
+    llm: LLMProvider,
+    repository_id: uuid.UUID,
+    sha: str,
+    sessions: list[AgentSession],
+    proposals: list[RuleProposal],
+    ids: dict[tuple[str, str], uuid.UUID],
+    touched: dict[str, list[Symbol]],
+    sources: dict[str, str],
+) -> ExtractionSummary:
+    key_to_symbol = _symbol_keys(touched)
+    accepted = await _accepted_from_proposals(
+        deps, repository_id, sessions, proposals, key_to_symbol
+    )
+    summary = ExtractionSummary("analyzed", from_preview=True)
+    return await _apply_accepted(
+        deps,
+        llm,
+        repository_id,
+        sha,
+        accepted,
+        ids,
+        key_to_symbol,
+        sources,
+        summary,
+        nearby=set(),
+        guards=False,
+        consumed=[p.id for p in proposals],
+    )
+
+
+async def _accepted_from_proposals(
+    deps: WorkerDeps,
+    repository_id: uuid.UUID,
+    sessions: list[AgentSession],
+    proposals: list[RuleProposal],
+    key_to_symbol: dict[str, tuple[str, Symbol]],
+) -> list[_Accepted]:
+    """Turn the stored proposals into rules to write. The text is the proposal's (a corrected
+    statement and a reason written by a person are kept as they are: they come from a person, not
+    from the model, so the "grounded in the conversation" check does not apply to them)."""
+    user_texts = [
+        (s.id, _normalize(str(e.get("text", ""))))
+        for s in sessions
+        for e in s.excerpts
+        if e.get("role") == "user" and e.get("kind") in ("intent", "context")
+    ]
+    accepted: list[_Accepted] = []
+    async with deps.session_factory() as session:
+        for proposal in proposals:
+            symbols = [k for k in dict.fromkeys(proposal.symbols) if k in key_to_symbol]
+            if not symbols:
+                logger.warning("proposal %s has no symbol in the commit any more", proposal.id)
+                continue
+            existing_id: uuid.UUID | None = None
+            if proposal.action == "update" and proposal.existing_rule_id is not None:
+                current = await session.get(Rule, proposal.existing_rule_id)
+                if current is not None and current.status == "rejected":
+                    continue  # somebody rejected that rule meanwhile: do not bring it back
+                if current is not None and current.status == "active":
+                    existing_id = current.id  # otherwise the change is written as a new rule
+            if proposal.state == "rejected" and existing_id is not None:
+                continue  # rejecting a change leaves the existing rule as it is
+            quote = proposal.origin_quote
+            session_id = None
+            if quote:
+                needle = _normalize(quote)
+                session_id = next((sid for sid, text in user_texts if needle in text), None)
+            human = proposal.rationale_source == "human"
+            accepted.append(
+                _Accepted(
+                    rule=ExtractedRule(
+                        action="update" if existing_id else "create",
+                        existing_rule_id=str(existing_id) if existing_id else None,
+                        statement=proposal.statement,
+                        rationale=proposal.rationale,
+                        origin_quote=quote if session_id else None,
+                        symbols=symbols,
+                        confidence=proposal.confidence,
+                    ),
+                    symbols=symbols,
+                    rationale=proposal.rationale,
+                    quote=quote if session_id else None,
+                    session_id=session_id or sessions[0].id,
+                    existing_id=existing_id,
+                    rationale_source="human" if human else "conversation",
+                    status="rejected" if proposal.state == "rejected" else "active",
+                    review=_Review(
+                        state=proposal.state,
+                        reviewer=proposal.reviewed_by,
+                        reviewed_at=proposal.reviewed_at,
+                        pr_number=proposal.pr_number,
+                        rationale_by=proposal.rationale_by if human else None,
+                    ),
+                )
+            )
+    return accepted
+
+
+async def _record_review(
+    session: AsyncSession, repository_id: uuid.UUID, rule_id: uuid.UUID, sha: str, item: _Accepted
+) -> bool:
+    """Write what people decided in the PR: validation of the revision just stored, and the
+    append-only history. Returns whether the rule ended up validated."""
+    review = item.review
+    assert review is not None
+    revision = await session.scalar(select(Rule.revision).where(Rule.id == rule_id)) or 1
+    # A reviewer who is also the author of the commit's session is recorded as such; commit authors
+    # are names or usernames, so anything that does not match exactly stays unknown (NULL).
+    author = await session.scalar(
+        select(Commit.author).where(Commit.repository_id == repository_id, Commit.sha == sha)
+    )
+    is_author = (
+        True if author and review.reviewer and author.lower() == review.reviewer.lower() else None
+    )
+    now = datetime.now(UTC)
+    validated = review.state in ("confirmed", "corrected") and review.reviewer is not None
+    if validated:
+        await session.execute(
+            update(Rule)
+            .where(Rule.id == rule_id)
+            .values(
+                validated_revision=revision,
+                validated_by=review.reviewer,
+                validated_at=review.reviewed_at or now,
+            )
+        )
+    if review.state != "pending" and review.reviewer:
+        session.add(
+            RuleReview(
+                rule_id=rule_id,
+                rule_revision=revision,
+                verdict=review.state,
+                reviewer=review.reviewer,
+                reviewer_source="github",
+                reviewer_is_session_author=is_author,
+                statement_after=item.rule.statement if review.state == "corrected" else None,
+                rationale_after=item.rationale if review.rationale_by else None,
+                pr_number=review.pr_number,
+            )
+        )
+    if review.rationale_by and item.rationale:  # a person gave the reason: its own history entry
+        session.add(
+            RuleReview(
+                rule_id=rule_id,
+                rule_revision=revision,
+                verdict="rationale_added",
+                reviewer=review.rationale_by,
+                reviewer_source="github",
+                reviewer_is_session_author=(
+                    True if author and author.lower() == review.rationale_by.lower() else None
+                ),
+                rationale_after=item.rationale,
+                pr_number=review.pr_number,
+            )
+        )
+    return validated
 
 
 async def _reject_unrelated_updates(
@@ -795,7 +1079,8 @@ async def _store_rule(
                     repository_id=repository_id,
                     statement=rule.statement.strip(),
                     rationale=item.rationale,
-                    rationale_source="conversation" if item.rationale else None,
+                    rationale_source=item.rationale_source if item.rationale else None,
+                    status=item.status,
                     confidence=rule.confidence,
                     embedding=vector,
                 )
@@ -816,7 +1101,7 @@ async def _store_rule(
         }
         if item.rationale:  # a new commit without a stated reason must not erase the old one
             values["rationale"] = item.rationale
-            values["rationale_source"] = "conversation"
+            values["rationale_source"] = item.rationale_source
         if statement != current.statement.strip() or (
             item.rationale and item.rationale != current.rationale
         ):
