@@ -54,6 +54,7 @@ from rastro_llm import (
 )
 from rastro_worker.deps import WorkerDeps
 from rastro_worker.indexing import ensure_symbols, is_indexable
+from rastro_worker.statement_numbers import same_numbers
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,11 @@ NEARBY_RULES_LIMIT = 6  # rules of neighbouring code offered to the model beside
 NEARBY_UPDATE_MIN_SIMILARITY = 0.6  # an "update" of a nearby rule must still resemble it
 # Proposal states that still have to be applied when the PR is merged (phase 9.4).
 APPLICABLE_STATES = ("pending", "confirmed", "corrected", "rejected")
-REJECTED_SIMILARITY = 0.92  # a new rule this close to a rejected one, on its symbols, is dropped
+# A new rule is a repeat of a rejected one when it is anchored to one of the same symbols, states
+# the same numbers (`same_numbers`) and its embedding cosine is at least this. Calibrated with
+# text-embedding-3-small: the same rule reworded scored 0.76-0.91, an unrelated one 0.55. Cosine
+# cannot tell "90 days" from "60 days" (0.96+), which is why the numbers are compared separately.
+REJECTED_SIMILARITY = 0.72
 SYMBOL_EMBEDDING_CHARS = 2_000
 ATTEMPTS = 2
 _NOISE_FILES = re.compile(r"(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|\.min\.(js|css)|\.map)$")
@@ -1024,8 +1029,10 @@ async def _drop_rejected_repeats(
 ) -> tuple[list[_Accepted], list[list[float]], int]:
     """A human rejected a rule: the model must not bring it back by proposing it again.
 
-    Only new rules are checked (an update targets an active rule by id). A match is a rejected rule
-    anchored to one of the same symbols whose statement is nearly identical.
+    Only new rules are checked. An update targets an active rule by id and a rejected update is not
+    stored as a rejected rule (it leaves the rule as it was), so there is nothing to compare it with.
+    A match is a rejected rule anchored to one of the same symbols whose statement is similar
+    (cosine >= REJECTED_SIMILARITY) and states the same numbers.
     """
     kept: list[_Accepted] = []
     kept_vectors: list[list[float]] = []
@@ -1040,8 +1047,8 @@ async def _drop_rejected_repeats(
                 }
                 repeated = None
                 if symbol_ids:  # a symbol with no row cannot carry a rejected rule
-                    repeated = await session.scalar(
-                        select(Rule.id)
+                    close = await session.execute(
+                        select(Rule.id, Rule.statement)
                         .join(RuleAnchor, RuleAnchor.rule_id == Rule.id)
                         .where(
                             Rule.repository_id == repository_id,
@@ -1050,7 +1057,15 @@ async def _drop_rejected_repeats(
                             Rule.embedding.cosine_distance(vector) <= 1 - REJECTED_SIMILARITY,
                             RuleAnchor.symbol_id.in_(symbol_ids),
                         )
-                        .limit(1)
+                        .distinct()
+                    )
+                    repeated = next(
+                        (
+                            rule_id
+                            for rule_id, statement in close
+                            if same_numbers(statement, item.rule.statement)
+                        ),
+                        None,
                     )
                 if repeated is not None:
                     logger.info(

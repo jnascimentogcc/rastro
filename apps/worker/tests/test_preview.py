@@ -5,7 +5,19 @@ from datetime import UTC, datetime
 from sqlalchemy import select, update
 from test_budget import spend
 from test_merged_pr import NUMBER, stage_pull_request
-from test_rule_extraction import AFTER, AGENDA, BEFORE, KEY, SHA1, SHA2, SHA3, rule
+from test_rule_extraction import (
+    AFTER,
+    AGENDA,
+    BEFORE,
+    DAYS_90,
+    FRIDAY_RULE,
+    KEY,
+    SHA1,
+    SHA2,
+    SHA3,
+    reject_rule,
+    rule,
+)
 from worker_support import WorkerContext, user_excerpt
 
 from rastro_db.models import Repository, Rule, RuleProposal
@@ -174,6 +186,45 @@ async def test_a_rule_a_human_rejected_is_not_proposed_again(worker: WorkerConte
     worker.llm.queue(RuleExtraction(rules=[]))
 
     assert (await preview(worker)).items == []
+
+
+async def previewed_after_rejection(
+    worker: WorkerContext, proposal: str, *, anchors: dict[tuple[str, str], str] | None = None
+) -> list[str]:
+    await reject_rule(worker, DAYS_90, like=proposal, anchors=anchors)
+    await stage_pull_request(worker)
+    worker.llm.queue(
+        RuleExtraction(rules=[rule(statement=proposal, rationale=None, origin_quote=None)])
+    )
+    worker.llm.queue(RuleExtraction(rules=[]))
+    return [item.statement for item in (await preview(worker)).items]
+
+
+async def test_a_rejected_rule_reworded_is_not_previewed(worker: WorkerContext) -> None:
+    reworded = "A booking cannot be made more than 90 days ahead; it is refused with a clear error"
+
+    assert await previewed_after_rejection(worker, reworded) == []
+
+
+async def test_the_same_wording_with_another_number_is_still_previewed(
+    worker: WorkerContext,
+) -> None:
+    sixty = DAYS_90.replace("90", "60")
+
+    assert await previewed_after_rejection(worker, sixty) == [sixty]
+
+
+async def test_an_unrelated_rule_is_previewed_despite_a_rejection(worker: WorkerContext) -> None:
+    assert await previewed_after_rejection(worker, FRIDAY_RULE) == [FRIDAY_RULE]
+
+
+async def test_a_rejection_on_other_symbols_does_not_hide_the_preview(
+    worker: WorkerContext,
+) -> None:
+    reworded = "A booking cannot be made more than 90 days ahead; it is refused with a clear error"
+    other = {("src/other.ts", "other"): "primary"}
+
+    assert await previewed_after_rejection(worker, reworded, anchors=other) == [reworded]
 
 
 async def test_without_budget_nothing_is_sent_and_the_outcome_says_so(
