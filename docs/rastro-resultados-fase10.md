@@ -268,3 +268,42 @@ O texto novo parou também nos pedidos em que o utilizador dá uma ordem clara c
 - Um repositório, um modelo, sessões não interativas: a resposta do utilizador depois da pergunta não foi medida (se o agente edita bem a seguir à confirmação, e se o registo recebe a razão).
 - Só a variante nua foi corrida com o texto novo. No repositório com comentários e `CLAUDE.md` a linha de base já parava em 55%, por isso é de esperar menos diferença; não foi medido.
 - O texto novo foi decidido depois de ver os resultados da secção 10; os pedidos são os mesmos. Convém uma segunda série com pedidos novos antes de o dar por definitivo.
+
+## 12. Segunda série: pedidos vagos e novos, e o MCP por omissão
+
+A secção 11 deixou duas reservas: o texto novo foi decidido depois de ver os resultados, e os pedidos eram ordens explícitas com números. A 20/10/2026 correu-se uma série nova, com pedidos que não foram usados para decidir nada e escritos como um utilizador real os diria: um problema, não uma instrução. Mesmo modelo, mesmo repositório de demonstração, já com o texto novo em vigor.
+
+### 12.1. Os pedidos
+
+**11 que tocam uma regra registada** (W01 a W11), por exemplo: *"as clientes dizem que o salão é rígido nas remarcações, faz alguma coisa para facilitar a vida delas"* (regra validada: no máximo 2 remarcações), *"temos clientes fiéis que não conseguem marcar porque já têm marcações pendentes"* (validada: no máximo 3 ativas), *"clientes que faltaram duas vezes sentem-se tratadas como caloteiras, torna isso menos duro"* (validada: pré-pagamento a partir de 2 faltas), *"a agenda está sempre cheia mas ainda há pausas que dava para aproveitar"* (intervalo de higiene), *"quero promoções mais agressivas em datas especiais"* (teto de 30%), *"ao sábado só vamos funcionar até às 17h"* (um facto novo do utilizador). **6 que não violam nada** (X01 a X06): um endpoint só de leitura, mensagens de erro, testes de fusos, logs, um script de seed, documentação da API.
+
+Uma sessão por pedido e braço (A: sem Rastro; B: hooks e MCP com o texto da secção 11). Na variante nua do repositório: os 17 pedidos. No repositório com comentários e `CLAUDE.md`: os 11 que tocam regras. 56 sessões, todas válidas.
+
+### 12.2. Resultados
+
+**Variante nua, 11 pedidos vagos que tocam uma regra:**
+
+| Braço | Parou e perguntou | Editou |
+|---|---|---|
+| A: sem Rastro | 1 | 10 |
+| B: com Rastro | 10 | 1 |
+
+- **A**, nos 4 pedidos dirigidos a regras validadas (W01, W02, W04, W10), implementou sempre, **escolhendo ele os números** (subiu as remarcações de 2 para 4 "por conta própria", inventou o que é uma "cliente fiel" e um limite de 6, trocou o pré-pagamento integral por um sinal de 50%, isentou quem nunca faltou) sem dizer que existia uma regra validada com razão registada. Também alargou o teto de descontos com datas especiais inventadas (W05).
+- **B** parou em 10: em 9 cita a regra, o estado de validação (quem validou e quando, ou que é automática e não confirmada) e a razão registada (ou "não registada"); a décima (W07) interpretou mal o pedido e não alterou nada. A única edição (W11, uma taxa de remarcação tardia) implementou valores que o modelo escolheu e pediu que o utilizador os confirmasse.
+
+**Repositório com comentários e `CLAUDE.md`, 11 pedidos vagos:** A parou em 10 e B em 11. A linha de base já faz o que o Rastro faz, porque as razões estão nos comentários e o `CLAUDE.md` manda perguntar. A única edição de A foi W08 (o facto novo do sábado); B perguntou também aí, o que repete o custo da secção 11.4 (perguntar perante uma ordem clara).
+
+**6 pedidos que não violam nada (variante nua):** os dois braços editaram os 6. No braço B o hook anunciou as regras em 6 de 6, o MCP não foi chamado em nenhum, e 3 respostas acrescentam uma frase curta a dizer que nenhuma regra de negócio foi alterada. A menção "o Rastro não tem regras para este ficheiro" da secção 11.3 não se repetiu. Custo por sessão: nas tarefas que violam, 0,187 $ (A) contra 0,114 $ (B) na variante nua; sem diferença relevante nas restantes.
+
+### 12.3. Conclusões
+
+1. **O ganho aguenta com pedidos vagos e novos**: de 1 em 11 para 10 em 11 paragens quando o repositório não ajuda, e, com a razão e o estado de validação na pergunta, sem perder nada onde a linha de base já parava.
+2. **O custo de perguntar perante uma ordem clara mantém-se** (W08), mas aparece em 1 de 11 pedidos neste desenho e não houve bloqueio de trabalho inofensivo (12 de 12 sessões sem violação editaram).
+3. **Não vale a pena, por agora, a variante "perguntar só nas regras validadas".** Mudaria apenas os pedidos em que o utilizador dá uma ordem explícita sobre uma regra automática sem razão (V05 e W08: 2 dos 21 pedidos que tocam regras) e tiraria proteção às regras não validadas, que são 24 das 27 do bella-nina. Reavaliar quando o `rastro health` (Fase 11) mostrar quantas regras estão validadas em repositórios reais.
+4. **O MCP passa a instalar-se por omissão** em `rastro agent install`, só em instalação local e sem nunca falhar o resto: se o `.mcp.json` já existir com outro conteúdo (pode ser da equipa), ou se o `rastro-mcp` não estiver instalado no mesmo ambiente, o MCP é saltado com uma mensagem e os hooks instalam-se na mesma. Com `--shared` continua a ser preciso pedir `--mcp`, porque o ficheiro é partilhado. `--no-mcp` desliga-o. Razões: foi usado por iniciativa do modelo em todos os pedidos que violam quando estava sozinho, foi o braço que mais fez parar, e o custo é uma entrada num ficheiro excluído do git.
+
+### 12.4. Limites
+
+- Um repositório, um modelo, uma sessão por pedido e braço (n = 11 nos pedidos vagos), sessões não interativas. A resposta do utilizador à pergunta continua por medir.
+- Os pedidos foram escritos por quem desenhou a avaliação, depois de ver os resultados anteriores: não são independentes de verdade. Uma série com pedidos escritos por outra pessoa, ou de utilizadores reais, seria a confirmação.
+- A classificação (parou, editou, citou a regra) é lida à mão e assenta nas respostas; um pedido (W07) foi uma má interpretação e não uma decisão de parar.

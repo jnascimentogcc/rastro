@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import shutil
@@ -311,12 +312,25 @@ def _hook_works(python: str) -> bool:
     return result.returncode == 0 and not result.stdout
 
 
-def _install_mcp(root: Path, *, shared: bool, python: str) -> None:
+def _install_mcp(root: Path, *, shared: bool, python: str, explicit: bool) -> None:
+    """Add the MCP server. Asked for with --mcp, a failure stops the command; as the default of a
+    local install, a failure only skips it (the hooks are the part that must always work)."""
+    if not explicit and importlib.util.find_spec("rastro_mcp") is None:
+        typer.echo(
+            "MCP server skipped: rastro-mcp is not installed next to rastro-cli. Add it with "
+            "`uv tool install rastro-cli --with rastro-mcp` (or pip install rastro-mcp) and run "
+            "`rastro agent install` again.",
+            err=True,
+        )
+        return
     try:
         result = agent_install.install_mcp(root, shared=shared, python=python)
     except agent_install.AgentInstallError as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(1) from None
+        if explicit:
+            typer.echo(str(error), err=True)
+            raise typer.Exit(1) from None
+        typer.echo(f"MCP server skipped: {error}", err=True)
+        return
     typer.echo(f"MCP server: {result} (.mcp.json).")
     if not shared:
         _exclude_from_git(root, ".mcp.json")
@@ -344,15 +358,16 @@ def agent_install_command(
         ),
     ] = False,
     mcp: Annotated[
-        bool,
+        bool | None,
         typer.Option(
-            "--mcp",
-            help="Also add the read-only `rastro` MCP server to .mcp.json "
-            "(search and detail of the rules, on request).",
+            "--mcp/--no-mcp",
+            help="Add the read-only `rastro` MCP server (search and detail of the rules, on "
+            "request) to .mcp.json. On by default for a local install, where a problem only "
+            "skips it; off by default with --shared, because that file is committed.",
         ),
-    ] = False,
+    ] = None,
 ) -> None:
-    """Install the Claude Code hooks that show the recorded rules before a file is edited."""
+    """Install the Claude Code hooks (and the MCP server) that tell the agent the recorded rules."""
     root = _repo_root_or_exit()
     python = Path(sys.executable).as_posix()
     try:
@@ -373,8 +388,10 @@ def agent_install_command(
             f"Warning: {python} could not run the hook module; reinstall rastro-cli.", err=True
         )
 
-    if mcp:
-        _install_mcp(root, shared=shared, python=python)
+    if mcp or (mcp is None and not shared):
+        _install_mcp(root, shared=shared, python=python, explicit=bool(mcp))
+    elif mcp is None:
+        typer.echo("MCP server not added to the shared file: run with --mcp to add it.")
 
     config, token = load_config(root), load_token(root)
     if config is None or token is None:
@@ -396,8 +413,11 @@ def agent_uninstall_command(
         bool, typer.Option("--shared", help="Remove it from .claude/settings.json instead.")
     ] = False,
     mcp: Annotated[
-        bool, typer.Option("--mcp", help="Also remove the `rastro` MCP server from .mcp.json.")
-    ] = False,
+        bool,
+        typer.Option(
+            "--mcp/--no-mcp", help="Also remove the `rastro` MCP server from .mcp.json (default)."
+        ),
+    ] = True,
 ) -> None:
     """Remove the hooks `rastro agent install` added (hooks of other tools are left alone)."""
     root = _repo_root_or_exit()
