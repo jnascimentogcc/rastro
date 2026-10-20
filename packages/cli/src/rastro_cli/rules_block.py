@@ -24,6 +24,11 @@ MAX_RATIONALE = 300
 MAX_NAME = 120
 MAX_BLOCK_CHARS = 2600
 MORE_HINT = ": ask the `rastro_rules_for_file` tool."
+# Rastro's own guidance, kept outside the data block so rule text can never be mistaken for it.
+ASK_BEFORE_CHANGING = (
+    "Rastro: if the request changes or contradicts one of these rules, say which rule it is and the "
+    "reason recorded for it, and ask the user to confirm before you edit."
+)
 
 # C0/C1 controls plus the Unicode line and paragraph separators
 _CONTROL = re.compile("[\x00-\x1f\x7f-\x9f" + chr(0x2028) + chr(0x2029) + "]+")
@@ -155,8 +160,6 @@ def render_block(
             "Rules not yet confirmed by a person were extracted automatically "
             "from past conversations."
         )
-    lines.append(
-        "A change that alters one of these rules is a business decision to mention to the user."
-    )
     lines.append("</rastro-rules>")
+    lines.append(ASK_BEFORE_CHANGING)
     return "\n".join(lines)

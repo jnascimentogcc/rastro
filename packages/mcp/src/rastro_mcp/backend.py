@@ -16,7 +16,14 @@ import httpx
 
 from rastro_cli import client, rules_block, rules_cache
 from rastro_cli.config import Config, load_config, load_token, save_config
-from rastro_cli.rules_block import MAX_NAME, MAX_RATIONALE, MAX_STATEMENT, clean, short_date
+from rastro_cli.rules_block import (
+    ASK_BEFORE_CHANGING,
+    MAX_NAME,
+    MAX_RATIONALE,
+    MAX_STATEMENT,
+    clean,
+    short_date,
+)
 
 ROOT_ENV_VAR = "RASTRO_REPO_ROOT"
 DEFAULT_SEARCH_LIMIT = 8
@@ -135,6 +142,7 @@ class Backend:
             lines.append("No active rule matches.")
         lines.append("Use rastro_get_rule with an id for the detail.")
         lines.append("</rastro-rules>")
+        lines.append(ASK_BEFORE_CHANGING)
         return "\n".join(lines)
 
     def get_rule(self, rule_id: str) -> str:
@@ -264,4 +272,5 @@ def _detail(detail: dict[str, Any]) -> str:
                 + note
             )
     lines.append("</rastro-rules>")
+    lines.append(ASK_BEFORE_CHANGING)
     return "\n".join(lines)
