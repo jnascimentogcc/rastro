@@ -23,6 +23,7 @@ MAX_STATEMENT = 400
 MAX_RATIONALE = 300
 MAX_NAME = 120
 MAX_BLOCK_CHARS = 2600
+MORE_HINT = ": ask the `rastro_rules_for_file` tool."
 
 # C0/C1 controls plus the Unicode line and paragraph separators
 _CONTROL = re.compile("[\x00-\x1f\x7f-\x9f" + chr(0x2028) + chr(0x2029) + "]+")
@@ -78,7 +79,7 @@ def rules_for_file(
     return selected
 
 
-def _short_date(raw: object) -> str:
+def short_date(raw: object) -> str:
     """`2026-10-12T10:00:00Z` -> `12 Oct`; anything else -> empty."""
     try:
         year, month, day = str(raw)[:10].split("-")
@@ -91,7 +92,7 @@ def _validation_label(rule: Mapping[str, Any]) -> str:
     if rule.get("validation") != "validated":
         return "[not yet confirmed by a person]"
     who = clean(rule.get("validated_by") or "", MAX_NAME)
-    when = _short_date(rule.get("validated_at")) if rule.get("validated_at") else ""
+    when = short_date(rule.get("validated_at")) if rule.get("validated_at") else ""
     detail = ", ".join(part for part in (f"@{who}" if who else "", when) if part)
     return f"[validated by {detail}]" if detail else "[validated by a person]"
 
@@ -125,6 +126,9 @@ def render_block(
     head_sha: str | None,
     *,
     ignore_case: bool = False,
+    max_rules: int = MAX_RULES,
+    max_chars: int = MAX_BLOCK_CHARS,
+    more_hint: str = MORE_HINT,
 ) -> str:
     """The delimited block for the agent, or "" when there is nothing to say."""
     if not rules:
@@ -132,9 +136,9 @@ def render_block(
     source = f"default branch @{clean(str(head_sha)[:7], 12)}" if head_sha else "default branch"
     parts: list[str] = []
     size = 0
-    for rule in rules[:MAX_RULES]:
+    for rule in rules[:max_rules]:
         entry = _entry(len(parts) + 1, rule, path, ignore_case=ignore_case)
-        if parts and size + len(entry) > MAX_BLOCK_CHARS:
+        if parts and size + len(entry) > max_chars:
             break
         parts.append(entry)
         size += len(entry)
@@ -145,7 +149,7 @@ def render_block(
         *parts,
     ]
     if omitted:
-        lines.append(f"{omitted} more rule(s) not shown: ask the `rastro_rules_for_file` tool.")
+        lines.append(f"{omitted} more rule(s) not shown{more_hint}")
     if any(rule.get("validation") != "validated" for rule in rules[: len(parts)]):
         lines.append(
             "Rules not yet confirmed by a person were extracted automatically "

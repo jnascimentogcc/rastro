@@ -20,6 +20,12 @@ PRE_TOOL_TIMEOUT_SECONDS = 3
 SESSION_START_TIMEOUT_SECONDS = 10
 
 
+MCP_SERVER = "rastro"
+MCP_MODULE = "rastro_mcp"
+MCP_SCRIPT = "rastro-mcp"
+MCP_PERMISSION = "mcp__rastro"  # allow-list entry covering all three read-only tools
+
+
 class AgentInstallError(RuntimeError):
     pass
 
@@ -146,3 +152,104 @@ def uninstall(root: Path, *, shared: bool) -> str:
     else:
         path.unlink()
     return "removed"
+
+
+# ---------------------------------------------------------------------- MCP server (.mcp.json)
+
+
+def mcp_path(root: Path) -> Path:
+    return root / ".mcp.json"
+
+
+def _mcp_entry(*, shared: bool, python: str) -> dict[str, Any]:
+    if shared:
+        return {"type": "stdio", "command": MCP_SCRIPT}
+    return {"type": "stdio", "command": python, "args": ["-m", MCP_MODULE]}
+
+
+def _mcp_is_ours(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    args = entry.get("args")
+    return entry.get("command") == MCP_SCRIPT or (isinstance(args, list) and MCP_MODULE in args)
+
+
+def _set_enabled_server(root: Path, *, enabled: bool) -> None:
+    """Pre-approve (or stop approving) the server in the local settings, so Claude Code does not
+    ask about a `.mcp.json` entry the person just installed on purpose."""
+    path = settings_path(root, shared=False)
+    settings = _load(path)
+    names = settings.get("enabledMcpjsonServers", [])
+    if not isinstance(names, list):
+        raise AgentInstallError(f"{path}: `enabledMcpjsonServers` is not a list; fix it first")
+    updated = [name for name in names if name != MCP_SERVER]
+    if enabled:
+        updated.append(MCP_SERVER)
+    if updated:
+        settings["enabledMcpjsonServers"] = updated
+    else:
+        settings.pop("enabledMcpjsonServers", None)
+    if settings:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    elif path.exists():
+        path.unlink()
+
+
+def install_mcp(root: Path, *, shared: bool, python: str) -> str:
+    """Add the `rastro` server to `.mcp.json`. Returns `created`, `updated` or `unchanged`.
+
+    Local: the entry holds this machine's interpreter, so the file must not be a team file that
+    already exists; it is refused unless it holds nothing but our entry. Shared: the entry is
+    the `rastro-mcp` script, and other servers in the file are kept. A `rastro` server that is
+    not ours is never overwritten.
+    """
+    path = mcp_path(root)
+    existed = path.exists()
+    config = _load(path)
+    servers = config.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        raise AgentInstallError(f"{path}: `mcpServers` is not an object; fix it first")
+    current = servers.get(MCP_SERVER)
+    if current is not None and not _mcp_is_ours(current):
+        raise AgentInstallError(
+            f"{path} already defines a `{MCP_SERVER}` server that is not Rastro's"
+        )
+    if not shared and existed and (set(config) != {"mcpServers"} or set(servers) - {MCP_SERVER}):
+        raise AgentInstallError(
+            f"{path} already exists and may be committed, so a machine-specific entry does not belong "
+            f"in it: use --shared, or `claude mcp add --scope local {MCP_SERVER} -- {python} -m {MCP_MODULE}`"
+        )
+    wanted = _mcp_entry(shared=shared, python=python)
+    if current == wanted:
+        result = "unchanged"
+    else:
+        servers[MCP_SERVER] = wanted
+        path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        result = "updated" if existed else "created"
+    if not shared:
+        _set_enabled_server(root, enabled=True)
+    return result
+
+
+def uninstall_mcp(root: Path) -> str:
+    """Remove our server (and its local approval). Returns `removed` or `nothing`."""
+    path = mcp_path(root)
+    removed = False
+    if path.exists():
+        config = _load(path)
+        servers = config.get("mcpServers")
+        if isinstance(servers, dict) and _mcp_is_ours(servers.get(MCP_SERVER)):
+            del servers[MCP_SERVER]
+            removed = True
+            if not servers:
+                del config["mcpServers"]
+            if config:
+                path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+            else:
+                path.unlink()
+    local = settings_path(root, shared=False)
+    if local.exists() and MCP_SERVER in (_load(local).get("enabledMcpjsonServers") or []):
+        _set_enabled_server(root, enabled=False)
+        removed = True
+    return "removed" if removed else "nothing"

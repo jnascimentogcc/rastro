@@ -247,12 +247,13 @@ rastro rule 4f3e2d1c                           # one rule: code anchors (primary
 
 ## Rules for the agent before it edits (phase 10, in progress)
 
-Steps 10.1 and 10.2 are in place (the MCP server, 10.3, and the coverage upload, 10.4, are not).
+Steps 10.1 to 10.3 are in place (the coverage upload, 10.4, and the evaluation, 10.5, are not).
 
 ```bash
 rastro agent install            # hooks in .claude/settings.local.json (not committed) + first download of the rules
 rastro agent install --shared   # .claude/settings.json for the whole team; needs `rastro-hook` on their PATH
-rastro agent uninstall          # removes only what install added
+rastro agent install --mcp      # also the read-only MCP server (.mcp.json, not committed; pip install rastro-mcp)
+rastro agent uninstall [--mcp]  # removes only what install added
 rastro sync                     # refresh .rastro/cache/rules.json by hand
 ```
 
@@ -264,7 +265,12 @@ of a file not yet shown to that session or subagent is denied once with the same
 start it refreshes a stale cache in the background and tells the model how many rules exist; after
 `/clear` or a compaction everything is announced again. Every announcement is noted (file, rule ids,
 no text) in `.rastro/consulted.jsonl`. The hook is standard library only and exits 0 on any problem, so
-it can never block the agent. See `docs/spec-fase-10-consulta-agente.md` and
+it can never block the agent.
+
+The `rastro-mcp` server (stdio, `packages/mcp`) answers on request, for agents that want to look something
+up rather than wait for a file read: `rastro_rules_for_file(path, symbol?)`, `rastro_search_rules(query, limit?)`
+and `rastro_get_rule(rule_id)`. All three only read and are marked `readOnlyHint`, so allowing `mcp__rastro`
+in `permissions.allow` is safe. It never exposes the original conversation quotes. See `docs/spec-fase-10-consulta-agente.md` and
 `docs/rastro-resultados-fase10.md`.
 
 ## Validating rules (phase 9.1)
