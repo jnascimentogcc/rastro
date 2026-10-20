@@ -70,17 +70,25 @@ def save(root: str | os.PathLike[str], snapshot: dict[str, Any], etag: str) -> N
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
             stream.write(payload)
-        try:  # noqa: SIM105 (contextlib is not imported on the hook path)
+        try:
             os.chmod(temp_name, 0o600)  # the rules are business text: owner only (no-op on Windows)
         except OSError:
             pass
         os.replace(temp_name, os.path.join(directory, RULES_FILE))
     except BaseException:
-        try:  # noqa: SIM105
+        try:
             os.unlink(temp_name)
         except OSError:
             pass
         raise
+
+
+def touch(root: str | os.PathLike[str]) -> None:
+    """Mark the cache as checked just now (a 304 leaves the file alone, so its age says when)."""
+    try:
+        os.utime(rules_path(root))
+    except OSError:
+        pass
 
 
 def etag_of(snapshot: dict[str, Any] | None) -> str | None:

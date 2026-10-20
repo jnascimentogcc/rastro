@@ -25,6 +25,7 @@ dependencies = [
 
 [project.scripts]
 rastro = "rastro_cli.main:app"
+rastro-hook = "rastro_cli.hook_entry:main"
 
 [build-system]
 requires = ["hatchling"]
