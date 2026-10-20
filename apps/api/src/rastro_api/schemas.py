@@ -15,6 +15,23 @@ class ExcerptIn(BaseModel):
     files: list[str] = Field(default_factory=list, max_length=100)
 
 
+class ConsultedIn(BaseModel):
+    """One time the agent hook told the agent about a file's rules (no rule text)."""
+
+    at: str = Field(max_length=40)
+    agent: str | None = Field(default=None, max_length=100)  # set for a subagent
+    file: str = Field(min_length=1, max_length=500)
+    rule_ids: list[str] = Field(max_length=20)
+    via: Literal["read", "deny"]
+
+    @field_validator("rule_ids")
+    @classmethod
+    def _short_ids(cls, value: list[str]) -> list[str]:
+        if any(len(item) > 64 for item in value):
+            raise ValueError("rule ids are limited to 64 characters")
+        return value
+
+
 class SessionCaptureIn(BaseModel):
     """Payload sent by `rastro capture` for one session linked to one commit."""
 
@@ -24,6 +41,9 @@ class SessionCaptureIn(BaseModel):
     agent_version: str | None = Field(default=None, max_length=50)
     git_branch: str | None = Field(default=None, max_length=300)
     excerpts: list[ExcerptIn] = Field(max_length=1000)
+    consulted: list[ConsultedIn] = Field(
+        default_factory=list, max_length=2000
+    )  # older CLIs omit it
 
     @field_validator("commit_sha")
     @classmethod

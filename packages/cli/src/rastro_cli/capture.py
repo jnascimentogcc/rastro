@@ -1,6 +1,7 @@
 """Build capture payloads for a commit and send them. Nothing here may break a commit."""
 
 import json
+import os
 import subprocess
 import sys
 import traceback
@@ -30,6 +31,9 @@ from rastro_session_parsers import (
 )
 
 LOG_NAME = "capture.log"
+CONSULTED_LOG = "consulted.jsonl"  # written by the agent hook (rastro_cli.hook_entry)
+MAX_CONSULTED_PER_PAYLOAD = 2000
+CONSULTED_MAX_AGE = timedelta(days=7)  # entries of a session that never reached a commit
 
 
 def log(root: Path, message: str) -> None:
@@ -150,6 +154,80 @@ def collect_payloads(
     return payloads
 
 
+def consulted_path(root: Path) -> Path:
+    return data_dir(root) / CONSULTED_LOG
+
+
+def _consulted_entry(line: str) -> dict[str, Any] | None:
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        return None
+    return entry if isinstance(entry, dict) and isinstance(entry.get("session"), str) else None
+
+
+def attach_consulted(root: Path, payloads: list[dict[str, Any]]) -> list[str]:
+    """Put what the agent hook announced into each payload of the same session.
+
+    The hook logs one line per announcement (file, rule ids, never text); the lines of a session
+    travel with the next capture of that session. Returns the lines used, to be removed with
+    `discard_consulted` once the payloads are safely on disk.
+    """
+    try:
+        lines = consulted_path(root).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    by_session: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for line in lines:
+        entry = _consulted_entry(line)
+        if entry is not None:
+            by_session.setdefault(entry["session"], []).append((line, entry))
+    used: list[str] = []
+    for payload in payloads:
+        found = by_session.pop(payload["session_ref"], [])[-MAX_CONSULTED_PER_PAYLOAD:]
+        payload["consulted"] = [
+            {
+                "at": entry.get("at") or "",
+                "agent": entry.get("agent"),
+                "file": entry.get("file") or "",
+                "rule_ids": entry.get("rule_ids") or [],
+                "via": entry.get("via") or "read",
+            }
+            for _, entry in found
+        ]
+        used.extend(line for line, _ in found)
+    return used
+
+
+def discard_consulted(root: Path, used: list[str]) -> None:
+    """Remove the lines that were sent, plus entries too old to ever matter. Lines the hook
+    appended in the meantime are kept (the file is read again, not overwritten from memory)."""
+    path = consulted_path(root)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    pending = list(used)
+    oldest = (datetime.now(UTC) - CONSULTED_MAX_AGE).isoformat(timespec="seconds")
+    kept: list[str] = []
+    for line in lines:
+        if line in pending:
+            pending.remove(line)
+            continue
+        entry = _consulted_entry(line)
+        if entry is None or str(entry.get("at") or "") < oldest.replace("+00:00", "Z"):
+            continue  # damaged, or older than a week
+        kept.append(line)
+    if len(kept) == len(lines):
+        return
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        temporary.write_text("".join(line + chr(10) for line in kept), encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError:
+        pass
+
+
 def write_pending(root: Path, payloads: list[dict[str, Any]]) -> list[Path]:
     directory = pending_dir(root)
     directory.mkdir(parents=True, exist_ok=True)
@@ -218,7 +296,9 @@ def run_capture(
         if load_config(root) is None:
             return
         payloads = collect_payloads(root, sha, projects_dir, since)
+        used = attach_consulted(root, payloads)
         write_pending(root, payloads)
+        discard_consulted(root, used)
         if since is None:
             record_captured(root, sha, git.commit_time(root, sha))
         flush_pending(root)

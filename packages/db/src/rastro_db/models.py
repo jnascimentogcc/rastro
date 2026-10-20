@@ -100,6 +100,11 @@ class AgentSession(Base):
     git_branch: Mapped[str | None] = mapped_column(Text)
     # encrypted at rest (rastro_db.crypto); readers still see a list of dicts
     excerpts: Mapped[list[dict[str, Any]]] = mapped_column(EncryptedExcerpts, nullable=False)
+    # What the agent hook told the agent while this session worked (file, rule ids, via; never rule
+    # text), for the phase 11 coverage metric. Not conversation content, so not encrypted.
+    consulted: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     captured_at: Mapped[datetime] = _now()
 
 
