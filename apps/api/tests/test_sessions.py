@@ -160,3 +160,84 @@ async def test_a_late_session_queues_extraction_only_when_the_commit_may_be_anal
     await api.client.post("/v1/sessions", json=PAYLOAD, headers=auth(api.token))
 
     assert len(api.jobs("rule_extraction")) == queued  # a feature-branch commit waits for the merge
+
+
+CONSULTED: list[dict[str, Any]] = [
+    {
+        "at": "2026-10-20T10:07:29Z",
+        "agent": None,
+        "file": "src/agenda.ts",
+        "rule_ids": ["r1"],
+        "via": "read",
+    },
+    {
+        "at": "2026-10-20T10:08:00Z",
+        "agent": "sub1",
+        "file": "src/calendar.ts",
+        "rule_ids": [],
+        "via": "deny",
+    },
+]
+
+
+async def stored_consulted(api: ApiContext) -> list[dict[str, Any]]:
+    async with create_session_factory(api.engine)() as session:
+        rows = (
+            await session.scalars(
+                select(AgentSession.consulted).where(
+                    AgentSession.repository_id == api.repository_id
+                )
+            )
+        ).all()
+    assert len(rows) == 1
+    stored: list[dict[str, Any]] = rows[0]
+    return stored
+
+
+async def test_the_announcements_are_stored_with_the_session_and_replaced_on_a_retry(
+    api: ApiContext,
+) -> None:
+    first = await api.client.post(
+        "/v1/sessions", json={**PAYLOAD, "consulted": CONSULTED}, headers=auth(api.token)
+    )
+    assert first.status_code == 201
+    assert await stored_consulted(api) == CONSULTED
+
+    retry = await api.client.post(
+        "/v1/sessions", json={**PAYLOAD, "consulted": CONSULTED[:1]}, headers=auth(api.token)
+    )
+    assert retry.status_code == 200
+    assert await stored_consulted(api) == CONSULTED[:1]
+
+
+async def test_a_cli_that_does_not_know_the_field_still_uploads(api: ApiContext) -> None:
+    response = await api.client.post("/v1/sessions", json=PAYLOAD, headers=auth(api.token))
+
+    assert response.status_code == 201
+    assert await stored_consulted(api) == []
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"via": "other"},
+        {"file": ""},
+        {"rule_ids": ["x" * 65]},
+        {"rule_ids": ["r"] * 21},
+        {"at": "x" * 41},
+    ],
+)
+async def test_malformed_announcements_are_rejected(api: ApiContext, bad: dict[str, Any]) -> None:
+    payload = {**PAYLOAD, "consulted": [{**CONSULTED[0], **bad}]}
+
+    response = await api.client.post("/v1/sessions", json=payload, headers=auth(api.token))
+
+    assert response.status_code == 422
+
+
+async def test_too_many_announcements_are_rejected(api: ApiContext) -> None:
+    payload = {**PAYLOAD, "consulted": [CONSULTED[0]] * 2001}
+
+    response = await api.client.post("/v1/sessions", json=payload, headers=auth(api.token))
+
+    assert response.status_code == 422

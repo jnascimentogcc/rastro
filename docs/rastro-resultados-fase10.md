@@ -122,3 +122,17 @@ Decisões:
 Teste com o Claude Code real no bella-nina: o servidor ligou (`connected`), as três ferramentas apareceram e, a um pedido em português ("que regras existem sobre cancelamentos e quem as validou"), o modelo pesquisou duas vezes por tema (em português e em inglês) e respondeu com as regras de cancelamento, os ids, as razões quando existem e os ficheiros, e reparou que a mesma regra aparece em duas entradas, uma delas sem motivo registado. A pesquisa foi semântica contra o servidor de dev. Não se editou nada (modo `plan`).
 
 Ainda por testar: o modelo escolher o MCP sozinho antes de editar, sem o utilizador o pedir (é o que a avaliação 10.5 mede), `--shared` com `rastro-mcp` realmente instalado e a publicação dos dois pacotes.
+
+## 9. Passo 10.4: registo de consultas no servidor
+
+Feito: a captura envia o `consulted` junto com cada sessão, o servidor guarda-o em `agent_sessions.consulted` (JSONB, migração `0011`) e o `POST /v1/sessions` valida-o. Ainda ninguém o lê: é a base da métrica de cobertura da Fase 11.
+
+Decisões:
+
+- **As linhas do registo do hook seguem com a primeira captura da sessão a que pertencem**, ligadas por `session` = `session_ref`. A linha sai do registo só depois de o ficheiro pendente estar escrito, e o registo é lido outra vez para o apagar, por isso o que o hook acrescentou entretanto não se perde. Num envio que falha, as linhas ficam dentro do ficheiro pendente (e não duplicadas no registo).
+- **Poda**: linhas com mais de 7 dias (sessões que nunca chegaram a um commit) e linhas ilegíveis saem em cada captura. O hook já deixa de escrever a 1 MiB.
+- **Uma sessão com vários commits** reparte as consultas pelas capturas por ordem de chegada; a métrica agrega por sessão, não por commit.
+- **Sem texto de regras nem identificador de sessão no envio** (o `session_ref` já está no corpo). Um teste percorre o caminho do hook ao pedido HTTP com uma regra de texto reconhecível e verifica que não aparece.
+- **Compatibilidade**: o campo é opcional (CLIs antigas continuam a enviar sem ele) e a coluna tem o valor por omissão `[]`. Sem cifra, porque não contém conversa nem texto de regras.
+
+Falta: usar estes dados (Fase 11, `rastro health`) e medir, na avaliação 10.5, se a consulta antes da edição aconteceu.

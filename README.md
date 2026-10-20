@@ -247,7 +247,7 @@ rastro rule 4f3e2d1c                           # one rule: code anchors (primary
 
 ## Rules for the agent before it edits (phase 10, in progress)
 
-Steps 10.1 to 10.3 are in place (the coverage upload, 10.4, and the evaluation, 10.5, are not).
+Steps 10.1 to 10.4 are in place (the evaluation, 10.5, is not).
 
 ```bash
 rastro agent install            # hooks in .claude/settings.local.json (not committed) + first download of the rules
@@ -264,7 +264,9 @@ never the network: a `Read` of a file with rules gets them as `additionalContext
 of a file not yet shown to that session or subagent is denied once with the same text. At session
 start it refreshes a stale cache in the background and tells the model how many rules exist; after
 `/clear` or a compaction everything is announced again. Every announcement is noted (file, rule ids,
-no text) in `.rastro/consulted.jsonl`. The hook is standard library only and exits 0 on any problem, so
+no text) in `.rastro/consulted.jsonl`, and the next `rastro capture` of that session uploads those
+lines with it (`agent_sessions.consulted`), the raw data for a future coverage metric: of the files with
+rules that a session edited, how many had been announced first. The hook is standard library only and exits 0 on any problem, so
 it can never block the agent.
 
 The `rastro-mcp` server (stdio, `packages/mcp`) answers on request, for agents that want to look something

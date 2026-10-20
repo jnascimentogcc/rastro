@@ -35,13 +35,14 @@ async def capture_session(
         "agent_version": payload.agent_version,
         "git_branch": payload.git_branch,
         "excerpts": [e.model_dump() for e in payload.excerpts],
+        "consulted": [c.model_dump() for c in payload.consulted],
     }
     insert_statement = insert(AgentSession).values(**values)
     statement = insert_statement.on_conflict_do_update(  # type: ignore[var-annotated]
         constraint="uq_agent_sessions_commit_session",
         set_={
             k: insert_statement.excluded[k]
-            for k in ("agent", "agent_version", "git_branch", "excerpts")
+            for k in ("agent", "agent_version", "git_branch", "excerpts", "consulted")
         },
     ).returning(AgentSession.id, literal_column("(xmax = 0)").label("created"))
     row = (await session.execute(statement)).one()
