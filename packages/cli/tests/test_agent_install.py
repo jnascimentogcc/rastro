@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -386,11 +387,85 @@ def test_install_with_mcp_from_the_command_line(
     assert not (configured / ".mcp.json").exists()
 
 
-def test_install_without_mcp_does_not_touch_mcp_json(
+def test_a_local_install_adds_the_mcp_server_by_default(
     configured: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     serve(monkeypatch)
 
+    result = runner.invoke(app, ["agent", "install"])
+
+    assert result.exit_code == 0, result.output
+    assert "MCP server: created (.mcp.json)." in result.output
+    assert mcp_servers(configured)["rastro"]["args"] == ["-m", "rastro_mcp"]
+
+
+def test_no_mcp_leaves_mcp_json_alone(configured: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    serve(monkeypatch)
+
+    result = runner.invoke(app, ["agent", "install", "--no-mcp"])
+
+    assert result.exit_code == 0, result.output
+    assert not (configured / ".mcp.json").exists()
+    assert (configured / ".claude" / "settings.local.json").exists()
+
+
+def test_a_shared_install_does_not_touch_the_committed_mcp_file_unless_asked(
+    configured: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve(monkeypatch)
+
+    plain = runner.invoke(app, ["agent", "install", "--shared"])
+    asked = runner.invoke(app, ["agent", "install", "--shared", "--mcp"])
+
+    assert plain.exit_code == 0 and "run with --mcp" in plain.output
+    assert asked.exit_code == 0, asked.output
+    assert mcp_servers(configured)["rastro"] == {"type": "stdio", "command": "rastro-mcp"}
+
+
+def test_a_team_mcp_file_only_skips_the_default_but_stops_an_explicit_request(
+    configured: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve(monkeypatch)
+    team = {"mcpServers": {"github": {"type": "http", "url": "https://x"}}}
+    (configured / ".mcp.json").write_text(json.dumps(team), encoding="utf-8")
+
+    default = runner.invoke(app, ["agent", "install"])
+    asked = runner.invoke(app, ["agent", "install", "--mcp"])
+
+    assert default.exit_code == 0, default.output
+    assert "MCP server skipped" in default.output and "--shared" in default.output
+    assert (configured / ".claude" / "settings.local.json").exists()  # the hooks went in anyway
+    assert asked.exit_code == 1
+    assert read(configured / ".mcp.json") == team  # never touched
+
+
+def test_without_rastro_mcp_installed_the_default_skips_it_instead_of_writing_a_broken_entry(
+    configured: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve(monkeypatch)
+    real = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *rest: None if name == "rastro_mcp" else real(name, *rest),
+    )
+
+    result = runner.invoke(app, ["agent", "install"])
+
+    assert result.exit_code == 0, result.output
+    assert "MCP server skipped: rastro-mcp is not installed" in result.output
+    assert not (configured / ".mcp.json").exists()
+
+
+def test_uninstall_removes_the_mcp_server_too_unless_told_not_to(
+    configured: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve(monkeypatch)
     runner.invoke(app, ["agent", "install"])
 
+    kept = runner.invoke(app, ["agent", "uninstall", "--no-mcp"])
+    assert (configured / ".mcp.json").exists() and "MCP server" not in kept.output
+
+    removed = runner.invoke(app, ["agent", "uninstall"])
+    assert "MCP server: removed" in removed.output
     assert not (configured / ".mcp.json").exists()

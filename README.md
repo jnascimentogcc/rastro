@@ -252,8 +252,8 @@ Steps 10.1 to 10.5 are in place; the evaluation is in `docs/rastro-resultados-fa
 ```bash
 rastro agent install            # hooks in .claude/settings.local.json (not committed) + first download of the rules
 rastro agent install --shared   # .claude/settings.json for the whole team; needs `rastro-hook` on their PATH
-rastro agent install --mcp      # also the read-only MCP server (.mcp.json, not committed; pip install rastro-mcp)
-rastro agent uninstall [--mcp]  # removes only what install added
+rastro agent install --no-mcp   # hooks only; by default a local install also adds the read-only MCP server (.mcp.json, not committed)
+rastro agent uninstall          # removes only what install added (hooks and the MCP entry; --no-mcp keeps the latter)
 rastro sync                     # refresh .rastro/cache/rules.json by hand
 ```
 
