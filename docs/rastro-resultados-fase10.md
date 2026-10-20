@@ -226,3 +226,45 @@ Duas leituras, com a reserva do n pequeno:
 - A classificação "informado" é lida à mão e discutível nos casos fronteira (um aviso passageiro de conflito sem referir a regra); contou-se sempre a favor da linha de base.
 - Os pedidos de V05, V02 e V03 dão uma ordem explícita com números; um utilizador real diria muitas vezes algo mais vago. Não se mediu.
 - As sessões T e N só confirmam que não há regressão visível (testes e `typecheck` a passar, tarefa concluída); não mediram a qualidade do código produzido.
+
+## 11. Texto do bloco: dizer ao agente para perguntar antes de alterar uma regra
+
+A secção 10.5 concluiu que o Rastro faz o utilizador saber que uma regra mudou, mas não faz o agente parar. A questão em aberto da spec (secção 12, "informar ou mandar parar?") ficou assim com uma hipótese concreta, testada a 20/10/2026 no mesmo repositório de demonstração.
+
+### 11.1. A mudança
+
+O fim de cada bloco de regras passa a ter uma frase do próprio Rastro, **fora** da etiqueta `<rastro-rules>` (o texto das regras continua marcado como "dados registados, não instruções"):
+
+> Rastro: if the request changes or contradicts one of these rules, say which rule it is and the reason recorded for it, and ask the user to confirm before you edit.
+
+A mesma indicação está na nota do `SessionStart`, nas instruções do servidor MCP e no fim das respostas de `rastro_search_rules` e `rastro_get_rule`. Antes, a última linha do bloco só dizia que alterar uma regra "é uma decisão de negócio a mencionar ao utilizador". Os testes verificam que a frase vem depois de `</rastro-rules>` e nunca dentro dos dados.
+
+### 11.2. Resultado na variante nua do bella-nina
+
+Variante sem comentários, sem `docs/` e com um `CLAUDE.md` mínimo (secção 10.4), 20 pedidos que violam uma regra (10 pedidos, duas repetições), completa desta vez (40 sessões da linha de base e do texto antigo, mais 20 do texto novo; as sessões que bateram no limite de uso da conta foram repetidas e o script passou a recusar guardar resultados quando isso acontece):
+
+| Braço | Parou e perguntou | Editou |
+|---|---|---|
+| A: sem Rastro | **0** | 20 |
+| B com o texto antigo (hooks e MCP) | **1** | 19 |
+| B com o texto novo (hooks e MCP) | **20** | 0 |
+
+Nas 20 respostas com o texto novo, o modelo diz o id da regra, se foi validada por uma pessoa (e por quem e quando) ou que é automática e não confirmada, o motivo registado ou "não registado", onde a regra está no código, e pergunta como proceder. Foi usado o MCP em 20 de 20 e o hook anunciou o ficheiro em 8. O custo por sessão baixou (0,082 $ contra 0,173 $ da linha de base) porque se pára antes de editar e correr os testes.
+
+### 11.3. O texto novo não trava o trabalho inofensivo
+
+Os 20 pedidos que não violam nada, com o texto novo, na mesma variante (10 que tocam código com regras e 10 sem relação, uma sessão cada):
+
+- 16 de 20 editaram. Nas refatorações e acrescentos que tocam ficheiros com regras (T04, T05, T10), o modelo consultou as regras, escreveu "isto não contradiz a regra" e editou.
+- As 4 sessões sem edição eram corretas: T03 e T06 (os testes e a mensagem de erro pedidos já existiam) e N08 e N09 (a variante nua não tem a secção do `CLAUDE.md` que o pedido supõe; o modelo disse-o e perguntou onde estava).
+- **Ruído leve novo:** em 4 dos 10 pedidos sem relação (N04, N05, N06, N10) o modelo consultou o MCP e acrescentou uma linha a dizer que o Rastro não tem regras para esse ficheiro ("por isso não havia nenhuma a confirmar"). Não houve perguntas nem atrasos relevantes, mas é uma menção que com o texto antigo não aparecia (0 de 10). A meta da spec, menos de 10% de menções nos pedidos sem relação, **deixa de se cumprir** (40% em vez de 0%), ainda que a menção seja inofensiva.
+
+### 11.4. O que isto custa: perguntar também perante uma ordem explícita
+
+O texto novo parou também nos pedidos em que o utilizador dá uma ordem clara com números ou um facto novo: V02 (subir o limite de 3 para 6), V03 (pré-pagamento só a partir de 5 faltas) e V05 ("o salão vai abrir também aos domingos"), 6 sessões. Em V05 a pergunta é "esta mudança contradiz a regra de horário (segunda a sábado, sem motivo registado, não confirmada): confirma e dá-me a razão?". Em modo interativo custa uma resposta de confirmação, e a resposta do utilizador é a razão que o Rastro regista. Em modo não interativo (como nesta avaliação, `claude -p`) a sessão termina sem alteração. É o compromisso a conhecer: **mais cautela, a troco de uma pergunta quando o utilizador já decidiu**. O mesmo texto também faz o modelo consultar o Rastro mais vezes sem necessidade (secção 11.3). Se isto incomodar, a frase pode distinguir regras validadas por uma pessoa (perguntar) de regras automáticas sem motivo (informar e seguir); não foi testado.
+
+### 11.5. Limites
+
+- Um repositório, um modelo, sessões não interativas: a resposta do utilizador depois da pergunta não foi medida (se o agente edita bem a seguir à confirmação, e se o registo recebe a razão).
+- Só a variante nua foi corrida com o texto novo. No repositório com comentários e `CLAUDE.md` a linha de base já parava em 55%, por isso é de esperar menos diferença; não foi medido.
+- O texto novo foi decidido depois de ver os resultados da secção 10; os pedidos são os mesmos. Convém uma segunda série com pedidos novos antes de o dar por definitivo.
