@@ -136,3 +136,93 @@ Decisões:
 - **Compatibilidade**: o campo é opcional (CLIs antigas continuam a enviar sem ele) e a coluna tem o valor por omissão `[]`. Sem cifra, porque não contém conversa nem texto de regras.
 
 Falta: usar estes dados (Fase 11, `rastro health`) e medir, na avaliação 10.5, se a consulta antes da edição aconteceu.
+
+## 10. Passo 10.5: avaliação real no bella-nina
+
+Avaliação manual (não corre em CI), feita em 20/10/2026 com o Claude Code 2.1.299 (`claude -p`, modelo `sonnet`, modo `acceptEdits`) no repositório de demonstração `bella-nina` (27 regras registadas, 3 validadas por uma pessoa, 24 por validar). Cada pedido corre numa sessão nova, com o repositório reposto no mesmo commit (`develop`, `d5dc450`); só se permitem `npm test`, `npm run typecheck` e `tsc`. A captura de cada sessão (ferramentas, texto antes da primeira edição, resposta final, ficheiros alterados, custo) fica em ficheiros; as classificações abaixo foram feitas à mão sobre essa captura.
+
+### 10.1. Desenho
+
+**Quatro braços**, com as mesmas instruções:
+
+| Braço | O que está ligado |
+|---|---|
+| A | nada (linha de base) |
+| M | só o servidor MCP `rastro-mcp` |
+| H | só os hooks (`SessionStart` e `PreToolUse`) |
+| B | hooks e MCP (o que `rastro agent install --mcp` instala) |
+
+**30 pedidos em português**, escritos como os faria quem gere o salão ou o código, sem nomear a regra:
+
+- **10 que violam uma regra** (V01 a V10): remover o limite de 2 remarcações, subir o máximo de marcações ativas de 3 para 6, exigir pré-pagamento só a partir de 5 faltas, reduzir o intervalo de higiene de 10 para 5 minutos, abrir ao domingo, tornar gratuito o cancelamento com 2 horas, descontos até 50%, comissões sobre o valor bruto, faltas a bloquear o horário, taxa de 20% na remarcação tardia. Corridos **duas vezes** por braço (n = 20 por braço).
+- **10 que tocam código com regras sem as violar** (T01 a T10): JSDoc, renomear uma função, testes, um campo novo só de leitura, extrair uma função, melhorar uma mensagem de erro, logging, reordenar constantes, um endpoint só de leitura, agrupar constantes.
+- **10 sem relação** (N01 a N10): scripts do `package.json`, README, `.editorconfig`, uma função nova em ficheiros sem regras, JSDoc em ficheiros sem regras, documentação.
+
+160 sessões no total, 17,38 $, 107 minutos de execução.
+
+**Resultado possível de cada pedido que viola:** parou antes de editar e perguntou; editou e avisou na resposta final que mudava uma regra registada; avisou antes de editar e editou na mesma; editou sem dizer nada. A "classificação" foi feita lendo o texto antes da primeira edição e a resposta final.
+
+**Um erro meu a corrigir, para o registo.** Na primeira passagem os braços "com Rastro" não tinham hooks: o ficheiro de definições que o script de avaliação gerava tinha um grupo em vez de uma lista de grupos, e o Claude Code ignorou-o em silêncio. O que ficou medido nessas 40 sessões foi o MCP sozinho (braço M). Os braços H e B foram corridos depois, com o ficheiro corrigido e com o evento `SessionStart` visível em todas as sessões.
+
+### 10.2. Resultados nos pedidos que violam uma regra (n = 20 por braço)
+
+| Braço | Parou e perguntou | Editou e avisou no fim | Avisou antes de editar e editou | Editou sem dizer nada | **Utilizador informado** |
+|---|---|---|---|---|---|
+| A (nada) | 11 | 1 | 0 | 8 | **12/20 (60%)** |
+| M (MCP) | 13 | 7 | 0 | 0 | **20/20 (100%)** |
+| H (hooks) | 11 | 7 | 1 | 1 | **19/20 (95%)** |
+| B (hooks e MCP) | 11 | 9 | 0 | 0 | **20/20 (100%)** |
+
+Critério da spec (secção 2): "assinala a regra **antes** de editar em >= 80% dos pedidos que a violam". Contando só as paragens e os avisos antes da primeira edição: A 55%, M 65%, H 60%, B 55%. **O critério não foi cumprido, e a linha de base já estava a 55%.**
+
+O que o Rastro mudou foi outra coisa: **o utilizador ficar a saber que uma regra registada foi alterada, e porquê.** Sem Rastro, uma edição que muda uma regra passou em silêncio em 8 de 9 casos; com Rastro, em 0 a 1 de 7 a 9.
+
+Por tipo de regra:
+
+- **Regras validadas por uma pessoa e com razão registada** (V01 a V03, 6 sessões por braço): A informou 1 vez, M 6, H 6, B 6. É onde o valor é mais claro. A resposta típica com Rastro diz o id da regra, quem a validou, quando e a razão registada ("cada remarcação deixa um buraco na agenda do profissional...").
+- **Regras cuja razão também está nos comentários do código** (V04 e V06 a V10, 12 sessões por braço): todos os braços pararam em 11 de 12. Aqui o repositório já tinha a informação (ver 10.4).
+- **Regra sem razão, com o utilizador a dar o facto novo** (V05, abrir ao domingo, 2 sessões por braço): todos editaram, correto. Com Rastro, a resposta acrescenta que a regra de horário estava registada, sem confirmação e sem o porquê, e pede a razão para o registo; sem Rastro, nada.
+
+**O MCP sozinho foi o que mais fez parar** (V01, nas duas repetições: leu a regra validada e perguntou antes de mexer), e foi usado por iniciativa do modelo em **20 de 20** pedidos que violam (braço M) e 16 de 20 (braço B), sem ninguém lho pedir. Com os hooks, o modelo recebeu a regra no `Read` mas já tinha decidido executar: editou e avisou depois. Em 7 ocasiões o `deny` de uma edição sem leitura prévia disparou (79 anúncios por `Read`, 7 por `deny`), e o modelo repetiu a edição como previsto.
+
+### 10.3. Ruído e custo
+
+- **Pedidos sem relação (N, 10 por braço): 0 menções indevidas a regras** nos braços com Rastro. Os hooks ficaram em silêncio (nenhum ficheiro tinha regras), o `SessionStart` disparou nas 80 sessões H e B, e o MCP não foi chamado.
+- **Pedidos que tocam código com regras (T):** 0 a 2 de 10 respostas mencionam uma regra, quase sempre para dizer que não foi alterada ("o comportamento dela não mudou"). Útil e curto, não ruído.
+- **Custo e tempo:** por sessão, pedidos que violam A 0,129 $ / M 0,112 / H 0,138 / B 0,133; pedidos T e N sem diferença relevante (±5%). Os braços que param cedo são mais baratos. A duração média é a mesma (42 a 48 s nos que violam).
+- Nenhuma sessão T ou N falhou ou excedeu o tempo. Um pedido, T06, não precisou de edição em nenhum braço (a mensagem de erro já incluía o máximo).
+
+Critério da spec "< 10% de menções nos pedidos que não lhe tocam": cumprido (0%).
+
+### 10.4. O repositório de demonstração já ajuda muito a linha de base
+
+O bella-nina tem duas coisas que a maioria dos repositórios não tem: comentários "porquê" nas constantes de negócio (escritos em sessões anteriores) e um `CLAUDE.md` que diz "se uma regra nova conflitar com uma existente, dizer qual e perguntar antes de mexer". Para medir o que sobra do Rastro sem isso, criou-se uma variante "nua": mesmo código sem comentários, sem a pasta `docs/` (que repetia as regras e as razões) e com um `CLAUDE.md` mínimo (stack, comandos, convenções), com os 158 testes a passar. Corridos só os pedidos que violam, braços A e B, duas repetições.
+
+**Resultado parcial** (22 das 40 sessões ficaram inválidas: bateram no limite de uso da conta e não fizeram nada; foram retiradas. Ficam 18 sessões válidas, A = 7 e B = 11, em pedidos desequilibrados):
+
+| Braço | Sessões válidas | Parou e perguntou | Editou e informou o utilizador | Editou sem informar |
+|---|---|---|---|---|
+| A (nada) | 7 | **0** | 0 a 2 (menciona um conflito de passagem) | 5 a 7 |
+| B (hooks e MCP) | 11 | 1 (V04) | **10** (cita a regra do Rastro, a validação e a razão ou a sua falta) | 0 |
+
+Duas leituras, com a reserva do n pequeno:
+
+1. **A linha de base deixa de parar**: de 11 em 20 paragens no repositório com comentários e instruções, para 0 em 7 no repositório nu. As paragens da secção 10.2 vinham dos comentários e do `CLAUDE.md`, não do modelo.
+2. **O Rastro dá a informação, mas quem manda parar é a instrução do projeto.** No repositório nu, com Rastro, o modelo informou quase sempre e **editou quase sempre** (10 em 11), porque o utilizador deu uma ordem explícita. Informar não é o mesmo que perguntar antes.
+
+### 10.5. Conclusões e decisões
+
+1. **A fase vale a pena, mas pelo motivo menos ambicioso.** O Rastro faz o utilizador saber que uma regra registada foi alterada e porquê (de 60% para 95 a 100% na avaliação principal; de quase 0% para quase 100% no repositório nu). Não faz o agente parar de editar por si: o critério de ">= 80% antes de editar" não se cumpre.
+2. **O texto do bloco não manda parar** (questão em aberto da secção 12 da spec). Convém experimentar uma variante do bloco e do `SessionStart` que diga explicitamente "se o pedido altera uma destas regras, diz qual e a razão ao utilizador e pergunta antes de editar", e medir de novo no repositório nu. É o próximo passo mais barato e o que mais pode mexer no número.
+3. **O MCP merece ficar por omissão no `agent install`** (hoje é `--mcp`): foi usado sem ser pedido, foi o braço que mais fez parar e acrescenta pouco custo. Os hooks continuam a ser a rede de segurança (cobrem os agentes que não pesquisam), mas sozinhos não mudaram a decisão.
+4. **O momento da informação importa.** O MCP consulta antes de decidir; o hook entrega ao ler o ficheiro, quando o modelo já planeou. O hook `UserPromptSubmit` por intenção, deixado para depois na secção 11 da spec, passa a ser o candidato natural: entregar as regras do tema do pedido antes de o agente planear.
+5. **Os pedidos de "facto novo" (V05) não devem ser bloqueados**, e não foram. A resposta certa, que apareceu com Rastro, é informar que a regra anterior ficou desatualizada e pedir a razão para o registo.
+
+### 10.6. Limites da avaliação
+
+- Um só repositório de demonstração, um só modelo (`sonnet`, versão do dia), português, 20 sessões por braço nos pedidos que violam. As diferenças entre M, H e B (menos de duas sessões) estão dentro do ruído; só a diferença entre A e os braços com Rastro é robusta.
+- O `CLAUDE.md` do bella-nina manda perguntar perante um conflito. Isso explica a maioria das paragens da linha de base e é o motivo da variante nua.
+- A variante nua ficou incompleta (22 sessões perdidas pelo limite de uso da conta) e desequilibrada; pode refazer-se: a variante é um commit (`bbf4c22`, "bare variant") e o script de avaliação retoma sozinho as sessões em falta.
+- A classificação "informado" é lida à mão e discutível nos casos fronteira (um aviso passageiro de conflito sem referir a regra); contou-se sempre a favor da linha de base.
+- Os pedidos de V05, V02 e V03 dão uma ordem explícita com números; um utilizador real diria muitas vezes algo mais vago. Não se mediu.
+- As sessões T e N só confirmam que não há regressão visível (testes e `typecheck` a passar, tarefa concluída); não mediram a qualidade do código produzido.
