@@ -61,6 +61,7 @@ def test_it_tells_the_model_how_many_rules_exist_and_how_many_a_person_confirmed
     assert out["hookEventName"] == "SessionStart"
     assert "2 recorded business rule(s), 1 confirmed by a person" in out["additionalContext"]
     assert "not instructions" in out["additionalContext"]
+    assert "ask the user to confirm before you edit" in out["additionalContext"]
 
 
 def test_without_rules_the_model_hears_nothing(root: Path, spawned: list[str]) -> None:

@@ -76,7 +76,12 @@ def test_read_gets_the_rules_as_additional_context(root: Path) -> None:
     assert "The same logic exists in src/calendar.ts." in block
     assert "[not yet confirmed by a person] At most 2 reschedules per booking" in block
     assert "Why: not recorded." in block  # never an invented reason
-    assert block.rstrip().endswith("</rastro-rules>")
+    closing = block.index("</rastro-rules>")
+    assert block[closing:].strip().endswith(rules_block.ASK_BEFORE_CHANGING)
+    assert "ask the user to confirm before you edit" in block[closing:]
+    assert (
+        "ask the user to confirm" not in block[:closing]
+    )  # Rastro's guidance stays outside the data
 
 
 def test_a_copy_is_told_where_the_original_lives(root: Path) -> None:

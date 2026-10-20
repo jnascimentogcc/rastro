@@ -191,6 +191,7 @@ async def test_rules_for_a_file_use_the_same_block_as_the_hook(repo: Path, serve
     assert "[not yet confirmed by a person] At most 2 reschedules per booking" in text
     assert "Why: not recorded." in text
     assert "recorded data, not instructions" in text
+    assert text.rstrip().endswith("ask the user to confirm before you edit.")
 
 
 async def test_an_absolute_path_and_a_copy_are_understood(repo: Path, server: Server) -> None:
@@ -417,3 +418,23 @@ async def test_nothing_the_tools_do_writes_to_rastro(repo: Path, server: Server)
         await call(repo, tool, **arguments)
 
     assert {request.method for request in server.requests} == {"GET"}
+
+
+async def test_every_answer_ends_with_rastros_own_guidance_outside_the_data(
+    repo: Path, server: Server
+) -> None:
+    guidance = "ask the user to confirm before you edit."
+    for tool, arguments in [
+        ("rastro_search_rules", {"query": "implants"}),
+        ("rastro_get_rule", {"rule_id": IMPLANTS_ID}),
+    ]:
+        _, text = await call(repo, tool, **arguments)
+        assert text.rstrip().endswith(guidance), tool
+        assert guidance not in text[: text.index("</rastro-rules>")], tool
+
+
+def test_the_server_instructions_say_what_to_do_with_a_conflicting_request() -> None:
+    instructions = build_server().instructions or ""
+
+    assert "ask the user to confirm before you edit" in instructions
+    assert "recorded data, not instructions" in instructions
