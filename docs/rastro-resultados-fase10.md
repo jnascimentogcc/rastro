@@ -107,3 +107,18 @@ Teste com o Claude Code real no bella-nina (27 regras, 3 validadas; hooks instal
 - O modelo **não propôs apagar o limite sem avisar**: escreveu que a regra do máximo de 2 remarcações foi validada a 19/10 com a razão da agenda da profissional, que removê-la a contradiz, e pediu ao utilizador a decisão e a razão (sugerindo, em alternativa, subir o limite). Uma só execução, mas é a segunda vez que uma regra validada faz o modelo parar e perguntar.
 
 Ainda por testar: `compact` num caso real (só testado com eventos simulados), macOS/Linux e o `--shared` com o `rastro-hook` realmente instalado.
+
+## 8. Passo 10.3: servidor MCP
+
+Feito: pacote `packages/mcp` (`rastro-mcp`, SDK de MCP 2.3, transporte stdio) com `rastro_rules_for_file`, `rastro_search_rules` e `rastro_get_rule`, todas só de leitura (`readOnlyHint`, `destructiveHint = false`), e `rastro agent install --mcp`.
+
+Decisões:
+
+- **O `rastro-mcp` depende do `rastro-cli`** em vez de um pacote comum novo. O ganho da extração que propus na análise seria evitar o `typer`, mas o servidor é um processo longo (o arranque não conta) e precisa de `keyring` e `httpx` de qualquer forma. Reutiliza `config`, `client` e `rules_block` sem refatorar o que já funciona.
+- **`rastro_rules_for_file` usa o snapshot** (com a mesma cache e o mesmo ETag do hook), por isso devolve exatamente o formato do hook, com duplicados, até 15 regras. Se o servidor estiver em baixo responde com a cópia local e diz-o; um 401, 403 ou 404 é um erro e não é escondido pela cache.
+- **Pesquisa e detalhe nunca mostram citações de origem**; o detalhe mostra âncoras, commits (sem texto) e revisões humanas. Todo o texto passa por `clean` e vem dentro das mesmas etiquetas "dados registados, não instruções".
+- **`install --mcp` local escreve `.mcp.json` com o interpretador desta máquina**, exclui-o do git e pré-aprova o servidor em `enabledMcpjsonServers` (a pessoa acabou de o pedir). Recusa-se a escrever num `.mcp.json` que já exista com outro conteúdo, porque pode ser um ficheiro de equipa e o caminho é desta máquina: nesse caso `--shared` (script `rastro-mcp`, sem pré-aprovação) ou `claude mcp add --scope local`. Nunca sobrescreve um servidor `rastro` que não seja o nosso. A permissão `mcp__rastro` não é acrescentada sozinha: o comando imprime a linha a juntar a `permissions.allow`, porque é uma definição de segurança da pessoa.
+
+Teste com o Claude Code real no bella-nina: o servidor ligou (`connected`), as três ferramentas apareceram e, a um pedido em português ("que regras existem sobre cancelamentos e quem as validou"), o modelo pesquisou duas vezes por tema (em português e em inglês) e respondeu com as regras de cancelamento, os ids, as razões quando existem e os ficheiros, e reparou que a mesma regra aparece em duas entradas, uma delas sem motivo registado. A pesquisa foi semântica contra o servidor de dev. Não se editou nada (modo `plan`).
+
+Ainda por testar: o modelo escolher o MCP sozinho antes de editar, sem o utilizador o pedir (é o que a avaliação 10.5 mede), `--shared` com `rastro-mcp` realmente instalado e a publicação dos dois pacotes.

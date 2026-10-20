@@ -277,3 +277,120 @@ def test_a_broken_settings_file_makes_install_fail_without_touching_it(
 
     assert result.exit_code == 1 and "not valid JSON" in result.output
     assert path.read_text(encoding="utf-8") == "{oops"
+
+
+# --------------------------------------------------------------------------- the MCP server
+
+
+def mcp_servers(root: Path) -> dict[str, Any]:
+    servers: dict[str, Any] = read(root / ".mcp.json")["mcpServers"]
+    return servers
+
+
+def test_the_local_mcp_install_uses_this_interpreter_and_pre_approves_the_server(
+    tmp_path: Path,
+) -> None:
+    result = agent_install.install_mcp(tmp_path, shared=False, python=PYTHON)
+
+    assert result == "created"
+    assert mcp_servers(tmp_path) == {
+        "rastro": {"type": "stdio", "command": PYTHON, "args": ["-m", "rastro_mcp"]}
+    }
+    assert read(tmp_path / ".claude" / "settings.local.json")["enabledMcpjsonServers"] == ["rastro"]
+    assert agent_install.install_mcp(tmp_path, shared=False, python=PYTHON) == "unchanged"
+    assert read(tmp_path / ".claude" / "settings.local.json")["enabledMcpjsonServers"] == ["rastro"]
+
+
+def test_the_shared_mcp_install_keeps_other_servers_and_asks_nobody_to_pre_approve(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"github": {"type": "http", "url": "https://x"}}}),
+        encoding="utf-8",
+    )
+
+    result = agent_install.install_mcp(tmp_path, shared=True, python=PYTHON)
+
+    assert result == "updated"
+    assert mcp_servers(tmp_path) == {
+        "github": {"type": "http", "url": "https://x"},
+        "rastro": {"type": "stdio", "command": "rastro-mcp"},
+    }
+    assert not (tmp_path / ".claude" / "settings.local.json").exists()
+
+
+def test_a_local_install_does_not_write_a_machine_path_into_a_team_file(tmp_path: Path) -> None:
+    team = {"mcpServers": {"github": {"type": "http", "url": "https://x"}}}
+    (tmp_path / ".mcp.json").write_text(json.dumps(team), encoding="utf-8")
+
+    with pytest.raises(agent_install.AgentInstallError, match="--shared"):
+        agent_install.install_mcp(tmp_path, shared=False, python=PYTHON)
+
+    assert read(tmp_path / ".mcp.json") == team
+
+
+def test_a_server_called_rastro_that_is_not_ours_is_never_overwritten(tmp_path: Path) -> None:
+    mine = {"mcpServers": {"rastro": {"type": "stdio", "command": "something-else"}}}
+    (tmp_path / ".mcp.json").write_text(json.dumps(mine), encoding="utf-8")
+
+    for shared in (True, False):
+        with pytest.raises(agent_install.AgentInstallError, match="not Rastro's"):
+            agent_install.install_mcp(tmp_path, shared=shared, python=PYTHON)
+
+    assert read(tmp_path / ".mcp.json") == mine
+
+
+def test_uninstalling_the_mcp_server_removes_only_ours(tmp_path: Path) -> None:
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"github": {"type": "http", "url": "https://x"}}}),
+        encoding="utf-8",
+    )
+    agent_install.install_mcp(tmp_path, shared=True, python=PYTHON)
+
+    assert agent_install.uninstall_mcp(tmp_path) == "removed"
+    assert mcp_servers(tmp_path) == {"github": {"type": "http", "url": "https://x"}}
+    assert agent_install.uninstall_mcp(tmp_path) == "nothing"
+
+
+def test_uninstalling_a_local_mcp_install_leaves_hooks_and_deletes_empty_files(
+    tmp_path: Path,
+) -> None:
+    agent_install.install(tmp_path, shared=False, python=PYTHON)
+    agent_install.install_mcp(tmp_path, shared=False, python=PYTHON)
+
+    assert agent_install.uninstall_mcp(tmp_path) == "removed"
+
+    assert not (tmp_path / ".mcp.json").exists()
+    settings = read(tmp_path / ".claude" / "settings.local.json")
+    assert "enabledMcpjsonServers" not in settings and len(ours(settings)) == 2  # the hooks stay
+
+
+def test_install_with_mcp_from_the_command_line(
+    configured: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve(monkeypatch)
+
+    result = runner.invoke(app, ["agent", "install", "--mcp"])
+
+    assert result.exit_code == 0, result.output
+    assert "MCP server: created (.mcp.json)." in result.output
+    assert "mcp__rastro" in result.output  # how to stop the per-call prompts
+    assert "cannot import rastro_mcp" not in result.output
+    assert mcp_servers(configured)["rastro"]["args"] == ["-m", "rastro_mcp"]
+    exclude = (configured / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert ".mcp.json" in exclude.splitlines()  # a local install is never committed by accident
+
+    removed = runner.invoke(app, ["agent", "uninstall", "--mcp"])
+
+    assert "MCP server: removed" in removed.output
+    assert not (configured / ".mcp.json").exists()
+
+
+def test_install_without_mcp_does_not_touch_mcp_json(
+    configured: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve(monkeypatch)
+
+    runner.invoke(app, ["agent", "install"])
+
+    assert not (configured / ".mcp.json").exists()
