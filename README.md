@@ -247,7 +247,7 @@ rastro rule 4f3e2d1c                           # one rule: code anchors (primary
 
 ## Rules for the agent before it edits (phase 10, in progress)
 
-Steps 10.1 to 10.4 are in place (the evaluation, 10.5, is not).
+Steps 10.1 to 10.5 are in place; the evaluation is in `docs/rastro-resultados-fase10.md`.
 
 ```bash
 rastro agent install            # hooks in .claude/settings.local.json (not committed) + first download of the rules
