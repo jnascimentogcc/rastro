@@ -247,15 +247,24 @@ rastro rule 4f3e2d1c                           # one rule: code anchors (primary
 
 ## Rules for the agent before it edits (phase 10, in progress)
 
-Step 10.1 is in place; the hook is not installed anywhere yet (that is 10.2), so nothing changes for
-an agent until then. `GET /v1/repos/{id}/rules/snapshot` returns every active rule with its active
-anchors (path and qualified name only, no quotes) and an `ETag` computed from the content, so a
-conditional request is answered with 304 only when nothing the agent would see has changed. `rastro
-sync` stores it in `.rastro/cache/rules.json` (owner-only, atomic). The entry point
-`python -m rastro_cli.hook_entry pre-tool` reads that file and, for a `Read` of a file with rules,
-answers with the rules as `additionalContext`; an `Edit`/`Write`/`MultiEdit` of a file not yet
-shown to that session or subagent is denied once with the same text. It is standard library only
-and exits 0 on any problem. See `docs/spec-fase-10-consulta-agente.md` and
+Steps 10.1 and 10.2 are in place (the MCP server, 10.3, and the coverage upload, 10.4, are not).
+
+```bash
+rastro agent install            # hooks in .claude/settings.local.json (not committed) + first download of the rules
+rastro agent install --shared   # .claude/settings.json for the whole team; needs `rastro-hook` on their PATH
+rastro agent uninstall          # removes only what install added
+rastro sync                     # refresh .rastro/cache/rules.json by hand
+```
+
+`GET /v1/repos/{id}/rules/snapshot` returns every active rule with its active anchors (path and
+qualified name only, no quotes) and an `ETag` computed from the content, so a conditional request is
+answered with 304 only when nothing the agent would see has changed. The hook reads the cached copy,
+never the network: a `Read` of a file with rules gets them as `additionalContext`; an `Edit`/`Write`
+of a file not yet shown to that session or subagent is denied once with the same text. At session
+start it refreshes a stale cache in the background and tells the model how many rules exist; after
+`/clear` or a compaction everything is announced again. Every announcement is noted (file, rule ids,
+no text) in `.rastro/consulted.jsonl`. The hook is standard library only and exits 0 on any problem, so
+it can never block the agent. See `docs/spec-fase-10-consulta-agente.md` and
 `docs/rastro-resultados-fase10.md`.
 
 ## Validating rules (phase 9.1)

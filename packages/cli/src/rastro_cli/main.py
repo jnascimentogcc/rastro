@@ -1,6 +1,8 @@
 import json
 import os
 import shutil
+import subprocess
+import sys
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -9,7 +11,7 @@ from typing import Annotated
 import httpx
 import typer
 
-from rastro_cli import capture, client, git, render, rules_cache
+from rastro_cli import agent_install, capture, client, git, render, rules_cache
 from rastro_cli.config import (
     DEFAULT_API_URL,
     Config,
@@ -21,6 +23,11 @@ from rastro_cli.config import (
 from rastro_cli.hook import HookError, install_post_commit
 
 app = typer.Typer(help="Rastro: keep the why behind AI-generated code.", no_args_is_help=True)
+agent_app = typer.Typer(
+    help="Hooks that tell your coding agent the recorded rules before it edits a file.",
+    no_args_is_help=True,
+)
+app.add_typer(agent_app, name="agent")
 
 # The hook must never fail a commit, so the hook-facing commands always exit 0.
 
@@ -253,10 +260,8 @@ def _repo_relative(value: str, root: Path) -> str | None:
     return None if relative == "." else relative
 
 
-@app.command("sync")
-def sync_command() -> None:
-    """Refresh the local copy of the repository's rules that the agent hook reads."""
-    root, config, token, repository_id = _api_context()
+def _sync_rules(root: Path, config: Config, token: str, repository_id: str) -> str:
+    """Refresh `.rastro/cache/rules.json`; returns the sentence to show."""
     cached = rules_cache.load(root)
     result = _call(
         lambda: client.get_rules_snapshot(
@@ -264,13 +269,105 @@ def sync_command() -> None:
         )
     )
     if result is None:
-        typer.echo("The rules cache is up to date.")
-        return
+        rules_cache.touch(root)
+        return "The rules cache is up to date."
     snapshot, etag = result
     rules_cache.save(root, snapshot, etag)
     count = len(snapshot["rules"])
     cut = " (the server cut the list: some rules are missing)" if snapshot.get("truncated") else ""
-    typer.echo(f"Rules cache updated: {count} rule{'s' if count != 1 else ''}{cut}.")
+    return f"Rules cache updated: {count} rule{'s' if count != 1 else ''}{cut}."
+
+
+@app.command("sync")
+def sync_command() -> None:
+    """Refresh the local copy of the repository's rules that the agent hook reads."""
+    root, config, token, repository_id = _api_context()
+    typer.echo(_sync_rules(root, config, token, repository_id))
+
+
+def _repo_root_or_exit() -> Path:
+    try:
+        return git.repo_root(Path.cwd())
+    except git.GitError:
+        typer.echo("Not inside a git repository.", err=True)
+        raise typer.Exit(1) from None
+
+
+def _hook_works(python: str) -> bool:
+    """Run the hook once on an empty event: it must answer nothing and exit 0."""
+    try:
+        result = subprocess.run(
+            [python, "-m", agent_install.HOOK_MODULE, "pre-tool"],
+            input=b"{}",
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and not result.stdout
+
+
+@agent_app.command("install")
+def agent_install_command(
+    shared: Annotated[
+        bool,
+        typer.Option(
+            "--shared",
+            help="Write .claude/settings.json (committed, runs on every teammate's machine) "
+            "instead of the local, uncommitted .claude/settings.local.json.",
+        ),
+    ] = False,
+) -> None:
+    """Install the Claude Code hooks that show the recorded rules before a file is edited."""
+    root = _repo_root_or_exit()
+    python = Path(sys.executable).as_posix()
+    try:
+        result = agent_install.install(root, shared=shared, python=python)
+    except agent_install.AgentInstallError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    path = agent_install.settings_path(root, shared=shared)
+    typer.echo(f"Claude Code hooks: {result} ({path.relative_to(root).as_posix()}).")
+    if shared:
+        typer.echo(
+            "This file is shared: teammates need `rastro-hook` on their PATH "
+            "(it is installed with rastro-cli); without it the hook prints an error and does nothing.",
+            err=True,
+        )
+    elif not _hook_works(python):
+        typer.echo(
+            f"Warning: {python} could not run the hook module; reinstall rastro-cli.", err=True
+        )
+
+    config, token = load_config(root), load_token(root)
+    if config is None or token is None:
+        typer.echo("Not configured: run `rastro init` so the rules can be downloaded.", err=True)
+        return
+    repository_id = config.repository_id
+    if repository_id is None:
+        typer.echo("Run `rastro sync` once to download the rules.")
+        return
+    try:
+        typer.echo(_sync_rules(root, config, token, repository_id))
+    except typer.Exit:
+        typer.echo("The hooks are installed; run `rastro sync` when the server is reachable.")
+
+
+@agent_app.command("uninstall")
+def agent_uninstall_command(
+    shared: Annotated[
+        bool, typer.Option("--shared", help="Remove it from .claude/settings.json instead.")
+    ] = False,
+) -> None:
+    """Remove the hooks `rastro agent install` added (hooks of other tools are left alone)."""
+    root = _repo_root_or_exit()
+    try:
+        result = agent_install.uninstall(root, shared=shared)
+    except agent_install.AgentInstallError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    path = agent_install.settings_path(root, shared=shared)
+    typer.echo(f"Claude Code hooks: {result} ({path.relative_to(root).as_posix()}).")
 
 
 @app.command("rules")

@@ -36,6 +36,12 @@ extend-exclude = ["fixtures", "packages/db/migrations/versions"]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
 ignore = ["E501"]  # line length is handled by ruff format
 
+[tool.ruff.lint.per-file-ignores]
+# The hook path may not import contextlib (start-up cost), so try/except/pass stays.
+"packages/cli/src/rastro_cli/hook_entry.py" = ["SIM105"]
+"packages/cli/src/rastro_cli/rules_cache.py" = ["SIM105"]
+"packages/cli/src/rastro_cli/rules_block.py" = ["SIM105"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["rastro_api", "rastro_cli", "rastro_code_analysis", "rastro_db", "rastro_github", "rastro_llm", "rastro_session_parsers", "rastro_worker"]
 

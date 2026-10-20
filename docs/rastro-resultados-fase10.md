@@ -87,3 +87,23 @@ Decisões tomadas a partir do spike:
 Latência da entrada real (25 execuções, 100 a 5 000 regras): **o tamanho da cache continua a não contar**, e o custo acima do Python vazio é de ~20 ms no mínimo (~50–100 ms no p50). Em valor absoluto os números desta máquina variaram muito entre corridas (o `python -c pass` foi de 102 ms a 278 ms), por isso o orçamento de 150 ms só se confirma com a medição do 10.5 em condições estáveis.
 
 Teste de ponta a ponta com o Claude Code real (cache com uma regra **validada**, pedido vago de relaxar a regra): o modelo **não editou** e perguntou, citando a regra, quem a validou e o porquê. No spike, com o bloco de teste (regra sem validação nem a frase final do bloco), o modelo editou e só referiu o porquê no resumo. É uma só execução, mas sugere que o rótulo "validada por" e a frase "é uma decisão de negócio a mencionar ao utilizador" pesam; fica como hipótese para o 10.5.
+
+## 7. Passo 10.2: instalador, `session-start` e registo de consultas
+
+Feito: `rastro agent install|uninstall [--shared]`, o subcomando `session-start` do hook e o registo local `.rastro/consulted.jsonl`. O script `rastro-hook` foi acrescentado à CLI para a instalação partilhada.
+
+Decisões:
+
+- **A instalação local aponta para o interpretador que corre a CLI** (`sys.executable -m rastro_cli.hook_entry`), por isso não depende do `rastro` estar no PATH; fecha o defeito "hook mudo quando o `rastro` não está no PATH". A instalação partilhada usa `rastro-hook`, porque um caminho de interpretador é de uma máquina. Depois de instalar, a CLI corre o hook uma vez, com um evento vazio, e avisa se falhar.
+- **A fusão nunca toca em hooks de terceiros** e é idempotente. Um ficheiro de definições inválido, ou com `hooks` de tipo errado, é recusado sem ser alterado.
+- **`session-start` não faz rede no processo do hook**: lança um `rastro sync` desligado do terminal quando a cache falta ou tem mais de 10 minutos, e responde com o que já existe. Na primeira sessão sem cache o modelo não ouve nada; a seguinte já ouve. O `rastro sync` passa a atualizar a data do ficheiro num 304, para a idade da cache significar "verificada".
+- **`clear` e `compact` esquecem o estado "informado" da sessão; `startup` e `resume` não**, porque aí o contexto sobrevive.
+- **O registo de consultas leva ids e ficheiros, nunca texto de regras**, e deixa de crescer a 1 MiB se ninguém o esvaziar (o envio é o 10.4).
+
+Teste com o Claude Code real no bella-nina (27 regras, 3 validadas; hooks instalados com `rastro agent install`), pedido em modo `plan` para não editar nada: "as clientes reclamam que não podem remarcar mais vezes; mostra como permitir remarcar sem limite".
+
+- O `SessionStart` entregou "27 regras, 3 confirmadas por uma pessoa".
+- O subagente de exploração do Claude Code recebeu as regras ao ler `src/api/server.ts` e `src/domain/scheduling.ts`; o registo tem as duas leituras, com o `agent_id` do subagente e 5 ids cada.
+- O modelo **não propôs apagar o limite sem avisar**: escreveu que a regra do máximo de 2 remarcações foi validada a 19/10 com a razão da agenda da profissional, que removê-la a contradiz, e pediu ao utilizador a decisão e a razão (sugerindo, em alternativa, subir o limite). Uma só execução, mas é a segunda vez que uma regra validada faz o modelo parar e perguntar.
+
+Ainda por testar: `compact` num caso real (só testado com eventos simulados), macOS/Linux e o `--shared` com o `rastro-hook` realmente instalado.
