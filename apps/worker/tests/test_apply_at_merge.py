@@ -12,6 +12,7 @@ from test_rule_extraction import AFTER, AFTER_SATURDAY, AGENDA, BEFORE, SHA2, SH
 from worker_support import WorkerContext, user_excerpt
 
 from rastro_db.models import Commit, Rule, RuleProposal, RuleReview
+from rastro_db.models import Symbol as SymbolRow
 from rastro_llm import LLMQuotaError, RuleExtraction
 from rastro_worker.indexing import index_repository
 from rastro_worker.preview import set_pr_author
@@ -373,3 +374,39 @@ async def test_the_pr_author_only_fills_proposals_that_have_none(worker: WorkerC
 
     proposals = await _proposals(worker)
     assert proposals and {p.pr_author for p in proposals} == {"dev-ana"}
+
+
+async def active_symbol_hashes(worker: WorkerContext) -> dict[str, str]:
+    async with worker.deps.session_factory() as session:
+        rows = await session.scalars(
+            select(SymbolRow).where(
+                SymbolRow.repository_id == worker.repository_id, SymbolRow.status == "active"
+            )
+        )
+        return {f"{s.file_path}::{s.qualified_name}": s.body_hash for s in rows}
+
+
+async def test_a_confirmation_records_the_code_the_reviewer_looked_at(
+    worker: WorkerContext,
+) -> None:
+    _, _, key = await previewed(worker)
+    await review(worker, 1001, body=f"/rastro ok {key[:6]}")
+
+    await merge(worker)
+
+    [entry] = await reviews(worker)
+    symbols = await active_symbol_hashes(worker)
+    assert entry.anchor_hashes  # {"path::qualified.name": body_hash}
+    assert all(
+        key in symbols and symbols[key] == value for key, value in entry.anchor_hashes.items()
+    )
+
+
+async def test_a_rejection_and_an_added_reason_record_no_code(worker: WorkerContext) -> None:
+    _, _, key = await previewed(worker)
+    await review(worker, 1001, body=f"/rastro why {key[:6]} The doctor needs 48h of follow-up")
+    await merge(worker)
+
+    [entry] = await reviews(worker)
+
+    assert entry.verdict == "rationale_added" and entry.anchor_hashes is None

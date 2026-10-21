@@ -8,7 +8,8 @@ cannot disagree.
 Step 11.1 covers the knowledge base (R1-R4, R6, R3b by origin only), the pipeline warning (V2), the
 zones and the review queue. Step 11.2 adds R3a (confirmed by someone other than the PR author), the
 process figures P1-P5 and the source of intent V1, which need the PR author and the commit-to-PR link
-that the webhook jobs started recording in migration 0012. Step 11.3 adds agent use (C1, C2) from `session_coverage`, computed when a capture arrives. R5 comes later.
+that the webhook jobs started recording in migration 0012. Step 11.3 adds agent use (C1, C2) from `session_coverage`, computed when a capture arrives. Step 11.4
+adds R5, the confirmations the code has overtaken, from the hashes a confirmation records.
 """
 
 import fnmatch
@@ -17,9 +18,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Text, and_, case, cast, distinct, exists, func, literal, or_, select
+from sqlalchemy import Text, and_, case, cast, distinct, exists, false, func, literal, or_, select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from rastro_db.anchors import anchor_key
 from rastro_db.models import (
     AgentSession,
     Commit,
@@ -98,6 +101,19 @@ DEFINITIONS: dict[str, dict[str, str]] = {
         "formula": "active rules that were validated and then changed (validated_revision < revision)",
         "source": "rules.validated_revision, rules.revision",
         "not_proof": "",
+    },
+    "R5": {
+        "title": "Confirmation outdated by a change in the code",
+        "formula": (
+            "confirmed rules whose anchor code has a different hash now than when the person confirmed "
+            "it / confirmed rules whose confirmation recorded the hashes"
+        ),
+        "source": "rule_reviews.anchor_hashes, symbols.body_hash",
+        "not_proof": (
+            "That the change breaks the rule: only that nobody looked again. Confirmations made before "
+            "the hashes were recorded are unknown. A symbol that disappeared is not counted here (the "
+            "rule becomes orphaned)"
+        ),
     },
     "R6": {
         "title": "Oldest rules nobody confirmed",
@@ -296,7 +312,7 @@ async def build_report(
 ) -> HealthReport:
     now = now or datetime.now(UTC)
     patterns = (*DEFAULT_EXCLUDES, *excludes)
-    knowledge = await _knowledge(session, repository_id, now)
+    knowledge, code_changed = await _knowledge(session, repository_id, now)
     window_start = now - timedelta(days=window_days)
     process = await _process(session, repository_id, window_start)
     intent = [await _intent(session, repository_id, window_start)]
@@ -310,7 +326,7 @@ async def build_report(
         .limit(1)
     )
     zones = await _zones(session, repository_id, patterns, zone_depth) if include_zones else []
-    queue = await _queue(session, repository_id, min(max(queue_size, 0), MAX_QUEUE))
+    queue = await _queue(session, repository_id, min(max(queue_size, 0), MAX_QUEUE), code_changed)
     return HealthReport(
         repository_id=repository_id,
         generated_at=now,
@@ -337,7 +353,7 @@ def _is_validated() -> Any:
 
 async def _knowledge(
     session: AsyncSession, repository_id: uuid.UUID, now: datetime
-) -> list[Metric]:
+) -> tuple[list[Metric], set[uuid.UUID]]:
     by_status = dict(
         (
             await session.execute(
@@ -368,6 +384,7 @@ async def _knowledge(
 
     github_verified = await _github_verified(session, repository_id)
     by_other, author_known = await _confirmed_by_other(session, repository_id)
+    code_changed, with_hashes = await _code_changed(session, repository_id)
     not_validated = await _unvalidated_ages(session, repository_id, now)
 
     metrics = [
@@ -414,9 +431,17 @@ async def _knowledge(
             validated + outdated,
             na_reason="no rule was ever confirmed",
         ),
+        ratio(
+            "R5",
+            "Confirmation outdated by a change in the code",
+            len(code_changed),
+            with_hashes,
+            na_reason="no confirmation has recorded the code it looked at (confirmations from before phase 11.4)",
+            detail={"unknown": validated - with_hashes},
+        ),
         not_validated,
     ]
-    return metrics
+    return metrics, code_changed
 
 
 async def _github_verified(session: AsyncSession, repository_id: uuid.UUID) -> int:
@@ -457,6 +482,53 @@ async def _confirmed_by_other(session: AsyncSession, repository_id: uuid.UUID) -
         )
     ).one()
     return int(row[0]), int(row[1])
+
+
+async def _code_changed(
+    session: AsyncSession, repository_id: uuid.UUID
+) -> tuple[set[uuid.UUID], int]:
+    """(confirmed rules whose anchor code is not what the person confirmed, confirmed rules whose
+    confirmation recorded the hashes). The comparison is by path and qualified name; an anchor whose
+    symbol no longer exists is skipped (the rule is on its way to orphaned, which R1 shows)."""
+    rows = (
+        await session.execute(
+            select(Rule.id, RuleReview.anchor_hashes)
+            .ext(distinct_on(Rule.id))
+            .join(
+                RuleReview,
+                and_(
+                    RuleReview.rule_id == Rule.id,
+                    RuleReview.rule_revision == Rule.validated_revision,
+                    RuleReview.verdict.in_(("confirmed", "corrected")),
+                    RuleReview.anchor_hashes.is_not(None),
+                ),
+            )
+            .where(Rule.repository_id == repository_id, Rule.status == "active", _is_validated())
+            .order_by(Rule.id, RuleReview.created_at.desc())
+        )
+    ).all()
+    # a confirmation that recorded no hashes (none, or a rule with no active anchor) tells nothing
+    recorded_hashes = [(rule_id, hashes) for rule_id, hashes in rows if hashes]
+    if not recorded_hashes:
+        return set(), 0
+    current = {
+        anchor_key(path, name): body_hash
+        for path, name, body_hash in (
+            await session.execute(
+                select(SymbolRow.file_path, SymbolRow.qualified_name, SymbolRow.body_hash).where(
+                    SymbolRow.repository_id == repository_id, SymbolRow.status == "active"
+                )
+            )
+        ).all()
+    }
+    changed = {
+        rule_id
+        for rule_id, hashes in recorded_hashes
+        if any(
+            key in current and current[key] != recorded for key, recorded in (hashes or {}).items()
+        )
+    }
+    return changed, len(recorded_hashes)
 
 
 async def _unvalidated_ages(
@@ -833,7 +905,12 @@ async def _zones(
 # --------------------------------------------------------------------------- queue
 
 
-async def _queue(session: AsyncSession, repository_id: uuid.UUID, size: int) -> list[QueueItem]:
+async def _queue(
+    session: AsyncSession,
+    repository_id: uuid.UUID,
+    size: int,
+    code_changed: set[uuid.UUID] | None = None,
+) -> list[QueueItem]:
     if size == 0:
         return []
     # One grouped join for every rule (a correlated subquery per rule scans symbol_calls each time)
@@ -850,6 +927,7 @@ async def _queue(session: AsyncSession, repository_id: uuid.UUID, size: int) -> 
     callers = func.coalesce(callers_of.c.callers, 0)
     no_reason = Rule.rationale.is_(None)
     validated = _is_validated()
+    changed = Rule.id.in_(code_changed) if code_changed else false()
     rows = (
         await session.execute(
             select(
@@ -864,11 +942,12 @@ async def _queue(session: AsyncSession, repository_id: uuid.UUID, size: int) -> 
             .where(
                 Rule.repository_id == repository_id,
                 Rule.status == "active",
-                or_(no_reason, ~validated),
+                or_(no_reason, ~validated, changed),
             )
             .order_by(
                 no_reason.desc(),
                 (~validated).desc(),
+                *([changed.desc()] if code_changed else []),  # a constant cannot be ordered by
                 callers.desc(),
                 Rule.updated_at.desc(),
                 Rule.id,
@@ -883,6 +962,8 @@ async def _queue(session: AsyncSession, repository_id: uuid.UUID, size: int) -> 
             reasons.append("no_rationale")
         if not is_valid:
             reasons.append("validation_outdated" if was_validated else "not_validated")
+        if rule_id in (code_changed or ()):
+            reasons.append("validation_outdated_by_code")
         queue.append(
             QueueItem(
                 rule_id=rule_id,
