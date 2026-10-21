@@ -201,7 +201,24 @@ Uma linha por repositório e dia (`UNIQUE (repository_id, taken_on)`): `window_d
 
 ### Ainda por fazer (avaliação real, precisa de pessoas ou de dados novos)
 
-- Teste de ação: validar 5 regras da fila e ver o número subir em 5 (R3a só distingue o autor quando há revisões do GitHub com autor do PR conhecido).
 - Teste de leitura: dar o relatório Markdown a alguém que não conhece o projeto e perguntar o que faria a seguir.
 - Pergunta da Fase 10 (perguntar só nas regras validadas): precisa de mais regras validadas do que as 3 que existem.
 - Ajuste dos limites (amostra pequena, janela, tamanho da fila) com base nessas leituras.
+
+### Teste de ação no `bella-nina` (feito)
+
+Confirmei pela CLI as 5 primeiras regras da fila (`995e23`, `ce19f7`, `3fa603`, `17cba1`, `f877e9`, nota "phase 11.6 action test"). Antes e depois, com `rastro health --json`:
+
+| Figura | Antes | Depois |
+|---|---|---|
+| Confirmed by a person (R3) | 3 de 27 | **8 de 27** (subiu 5) |
+| ...verified by GitHub (R3b) | 3 de 3 | 3 de 8 (as 5 novas são da CLI, "not verified") |
+| ...by someone other than the PR author (R3a) | n/a | n/a (revisões da CLI não têm autor do PR conhecido) |
+| Code changed after confirming (R5) | n/a | **0 de 5** (as 5 gravaram os hashes) |
+| Queue | 5 primeiras sem motivo nem confirmação | passaram a ser outras 5 (`7887bf`, `e4cf0d`, `86bede`, ...) |
+
+Leituras:
+
+- **A fila não encurta quando se confirma uma regra sem motivo**: as 5 regras confirmadas continuam na fila com a razão `no_rationale`, só passam para depois das não confirmadas. É o desenho da spec (a fila pede motivo *e* confirmação), mas quem confirma 5 regras e vê o 5 a voltar à lista pode estranhar. Candidato a ajuste no passo de limites: mostrar a razão "só falta o motivo" de forma distinta, ou propor `--why` no comando da regra.
+- O R3a só distingue autor e outro revisor com revisões do GitHub em que o autor do PR é conhecido; pela CLI fica `n/a`, como previsto. Continua por verificar num ciclo de PR real.
+- Os dados ficam na base de desenvolvimento (são confirmações reais do utilizador sobre regras reais).
