@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from rastro_api.routers import auth, github, rules, sessions
+from rastro_api.routers import health as health_routes
 from rastro_db import create_engine, create_session_factory
 from rastro_github import GitHubSettings
 from rastro_llm import LLMProvider, LLMSettings, OpenAIProvider
@@ -61,6 +62,7 @@ def create_app(
     app.include_router(sessions.router)
     app.include_router(github.router)
     app.include_router(rules.router)
+    app.include_router(health_routes.router)
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:

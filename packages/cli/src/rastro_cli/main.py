@@ -12,7 +12,7 @@ from typing import Annotated
 import httpx
 import typer
 
-from rastro_cli import agent_install, capture, client, git, render, rules_cache
+from rastro_cli import agent_install, capture, client, git, render, render_health, rules_cache
 from rastro_cli.config import (
     DEFAULT_API_URL,
     Config,
@@ -431,6 +431,61 @@ def agent_uninstall_command(
     typer.echo(f"Claude Code hooks: {result} ({path.relative_to(root).as_posix()}).")
     if mcp_result is not None:
         typer.echo(f"MCP server: {mcp_result} (.mcp.json).")
+
+
+def _window_days(value: str) -> int:
+    """`30`, `30d` or `4w` as a number of days."""
+    text = value.strip().lower()
+    factor = 7 if text.endswith("w") else 1
+    digits = text[:-1] if text[-1:] in ("d", "w") else text
+    if not digits.isdigit():
+        raise typer.BadParameter("use a number of days such as 30 or 30d (or weeks such as 4w)")
+    return int(digits) * factor
+
+
+@app.command("health")
+def health_command(
+    window: Annotated[
+        str,
+        typer.Option(help="Days the process and pipeline figures cover (7 to 365): 30, 30d, 4w."),
+    ] = "30d",
+    zones: Annotated[bool, typer.Option("--zones", help="Show the zones (directories).")] = False,
+    queue: Annotated[
+        int, typer.Option(help="Rules in the review queue (0 hides it).", min=0, max=50)
+    ] = 5,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option(help="Leave files matching this glob out of the zones; repeatable."),
+    ] = None,
+    explain: Annotated[
+        bool,
+        typer.Option(
+            "--explain", help="Say how each figure is computed and what it does not prove."
+        ),
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the raw server response.")] = False,
+) -> None:
+    """How much of the repository's knowledge is recorded, explained and confirmed by people."""
+    days = _window_days(window)
+    if not 7 <= days <= 365:
+        raise typer.BadParameter("the window must be between 7 and 365 days")
+    root, config, token, repository_id = _api_context()
+    report = _call(
+        lambda: client.get_health(
+            token,
+            config.api_url,
+            repository_id,
+            window=days,
+            exclude=exclude or [],
+            zones=zones,
+            queue=queue,
+            explain=explain,
+        )
+    )
+    if as_json:
+        typer.echo(json.dumps(report, indent=2))
+    else:
+        typer.echo(render_health.render_health(report, zones=zones, explain=explain), nl=False)
 
 
 @app.command("rules")
