@@ -7,7 +7,15 @@ import pytest
 from api_support import ApiContext
 
 from rastro_db import create_session_factory
-from rastro_db.models import AgentSession, Commit, Rule, RuleAnchor, RuleProposal, RuleReview
+from rastro_db.models import (
+    AgentSession,
+    Commit,
+    Rule,
+    RuleAnchor,
+    RuleProposal,
+    RuleReview,
+    SessionCoverage,
+)
 from rastro_db.models import Symbol as SymbolRow
 
 pytestmark = pytest.mark.db
@@ -289,3 +297,76 @@ async def test_v1_counts_a_squash_commit_with_the_pull_request_whose_sessions_it
 
     assert wider["detail"]["pull_requests"] == 4  # PR 20 comes in with its session
     assert (wider["numerator"], wider["denominator"]) == (1, 5)
+
+
+# --------------------------------------------------------------------------- C1 / C2
+
+
+async def seed_sessions(
+    api: ApiContext, rows: list[tuple[str, bool | None, int, int, float]]
+) -> None:
+    async with create_session_factory(api.engine)() as session, session.begin():
+        for ref, hook, edited, consulted, days_ago in rows:
+            session.add(
+                SessionCoverage(
+                    repository_id=api.repository_id,
+                    session_ref=ref,
+                    started_at=ago(days=days_ago),
+                    hook_active=hook,
+                    edited_ruled=edited,
+                    consulted_first=consulted,
+                    files=[],
+                )
+            )
+
+
+async def test_c1_and_c2_count_files_and_sessions_where_the_hook_state_is_known(
+    api: ApiContext,
+) -> None:
+    await seed_sessions(
+        api,
+        [
+            ("s1", True, 4, 3, 2),
+            ("s2", True, 2, 2, 5),
+            ("s3", False, 3, 0, 5),  # the hook was installed but never ran: counts as not announced
+            ("s4", None, 5, 0, 5),  # an older CLI that did not say: left out, and listed
+            ("old", True, 10, 10, 60),  # outside the 30-day window
+        ],
+    )
+
+    agents = by_id((await get(api))["agents"])
+
+    c1, c2 = agents["C1"], agents["C2"]
+    assert (c1["numerator"], c1["denominator"]) == (5, 9)  # s1 + s2 + s3
+    assert c1["detail"] == {
+        "with_hook": {"announced": 5, "edited": 6},
+        "without_hook": {"announced": 0, "edited": 3},
+        "sessions_with_unknown_hook": 1,
+    }
+    assert (c2["numerator"], c2["denominator"]) == (2, 3)
+    assert c2["detail"] == {"unknown": 1}
+
+
+async def test_when_no_session_edited_a_file_with_rules_c1_says_so(api: ApiContext) -> None:
+    await seed_sessions(api, [("s1", True, 0, 0, 1)])
+
+    c1 = by_id((await get(api))["agents"])["C1"]
+
+    assert c1["available"] is False and "edited a file that already had rules" in c1["na_reason"]
+
+
+async def test_when_no_cli_said_whether_the_hook_ran_it_is_not_zero_but_unknown(
+    api: ApiContext,
+) -> None:
+    await seed_sessions(api, [("s1", None, 3, 0, 1), ("s2", None, 2, 0, 2)])
+
+    agents = by_id((await get(api))["agents"])
+
+    assert agents["C1"]["available"] is False and "older CLI" in agents["C1"]["na_reason"]
+    assert agents["C2"]["available"] is False and agents["C2"]["value"] is None
+
+
+async def test_without_sessions_there_is_nothing_to_report(api: ApiContext) -> None:
+    agents = by_id((await get(api))["agents"])
+
+    assert agents["C1"]["available"] is False and agents["C2"]["available"] is False

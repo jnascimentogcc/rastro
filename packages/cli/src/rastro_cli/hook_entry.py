@@ -92,28 +92,57 @@ def _forget_informed(root: str, session_id: object) -> None:
                 pass
 
 
-def _record_consultation(
-    root: str, event: dict[str, Any], relative: str, rules: Any, via: str
-) -> None:
-    """One line per time the agent was told about a file's rules (never the rule text)."""
+def _append_consultation(root: str, entry: dict[str, Any]) -> None:
+    """One line in the log the capture sends to the server (never rule text); stops at 1 MiB."""
     path = os.path.join(root, rules_cache.DATA_DIR, CONSULT_LOG)
     try:
         if os.path.exists(path) and os.path.getsize(path) > MAX_CONSULT_LOG_BYTES:
             return
-        line = json.dumps(
-            {
-                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "session": event.get("session_id"),
-                "agent": event.get("agent_id"),
-                "file": relative,
-                "rule_ids": [str(rule.get("id")) for rule in rules[: rules_block.MAX_RULES]],
-                "via": via,
-            }
-        )
         with open(path, "a", encoding="utf-8") as stream:
-            stream.write(line + "\n")
-    except (OSError, AttributeError):
+            stream.write(json.dumps(entry) + "\n")
+    except OSError:
         pass
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _record_consultation(
+    root: str, event: dict[str, Any], relative: str, rules: Any, via: str
+) -> None:
+    """One line per time the agent was told about a file's rules."""
+    try:
+        ids = [str(rule.get("id")) for rule in rules[: rules_block.MAX_RULES]]
+    except AttributeError:
+        return
+    _append_consultation(
+        root,
+        {
+            "at": _now(),
+            "session": event.get("session_id"),
+            "agent": event.get("agent_id"),
+            "file": relative,
+            "rule_ids": ids,
+            "via": via,
+        },
+    )
+
+
+def _record_start(root: str, event: dict[str, Any]) -> None:
+    """Proof that the hook ran in this session: it separates "no file was announced" from "the hook
+    did not run" in the coverage figures (`startup`, `resume`, `clear` and `compact` all count)."""
+    _append_consultation(
+        root,
+        {
+            "at": _now(),
+            "session": event.get("session_id"),
+            "agent": None,
+            "file": "",
+            "rule_ids": [],
+            "via": "start",
+        },
+    )
 
 
 def _load_informed(path: str) -> set[str]:
@@ -253,6 +282,7 @@ def session_start(stdin: bytes) -> dict[str, Any] | None:
         root = rules_cache.find_root(str(event.get("cwd") or os.getcwd()))
         if root is None:
             return None
+        _record_start(root, event)
         if event.get("source") in ("clear", "compact"):
             _forget_informed(root, event.get("session_id"))
         snapshot = rules_cache.load(root)  # read before the refresh: this session sees what exists

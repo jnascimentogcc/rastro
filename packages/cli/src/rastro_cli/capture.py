@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from rastro_cli import client, git
+from rastro_cli import agent_install, client, git
 from rastro_cli.config import (
     captured_path,
     data_dir,
@@ -183,6 +183,7 @@ def attach_consulted(root: Path, payloads: list[dict[str, Any]]) -> list[str]:
         if entry is not None:
             by_session.setdefault(entry["session"], []).append((line, entry))
     used: list[str] = []
+    installed = agent_install.hook_installed(root)
     for payload in payloads:
         found = by_session.pop(payload["session_ref"], [])[-MAX_CONSULTED_PER_PAYLOAD:]
         payload["consulted"] = [
@@ -196,6 +197,13 @@ def attach_consulted(root: Path, payloads: list[dict[str, Any]]) -> list[str]:
             for _, entry in found
         ]
         used.extend(line for line, _ in found)
+        # Proof from the hook itself when there is one; otherwise "installed but silent" is false and
+        # "not installed" is unknown (the field is left out). A later capture of the same session has no
+        # start line (it travelled with the first one): the server keeps the true it already has.
+        if any(entry.get("via") == "start" for _, entry in found):
+            payload["agent_hook"] = True
+        elif installed:
+            payload["agent_hook"] = False
     return used
 
 

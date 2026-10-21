@@ -218,3 +218,38 @@ def test_session_start_runs_as_a_process_and_exits_zero(root: Path) -> None:
         "recorded business rule(s)"
         in json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
     )
+
+
+def log_lines(root: Path) -> list[dict[str, Any]]:
+    text = (root / ".rastro" / "consulted.jsonl").read_text(encoding="utf-8")
+    return [json.loads(line) for line in text.splitlines()]
+
+
+def test_session_start_leaves_proof_that_the_hook_ran_even_with_no_rules(
+    root: Path, spawned: list[str]
+) -> None:
+    assert start(root, source="startup", session="s9") is None  # nothing to tell the model
+
+    [marker] = log_lines(root)
+    assert (marker["via"], marker["session"], marker["file"], marker["rule_ids"]) == (
+        "start",
+        "s9",
+        "",
+        [],
+    )
+    assert marker["at"].endswith("Z")
+
+
+@pytest.mark.parametrize("source", ["startup", "resume", "clear", "compact"])
+def test_every_way_a_session_can_start_leaves_one_marker(
+    root: Path, spawned: list[str], source: str
+) -> None:
+    start(root, source=source)
+
+    assert [entry["via"] for entry in log_lines(root)] == ["start"]
+
+
+def test_no_marker_outside_a_rastro_repository(tmp_path: Path, spawned: list[str]) -> None:
+    start(tmp_path)
+
+    assert not (tmp_path / ".rastro").exists()

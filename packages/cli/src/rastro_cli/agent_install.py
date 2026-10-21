@@ -66,6 +66,25 @@ def is_ours(hook: Any) -> bool:
     return hook.get("command") == HOOK_SCRIPT or (isinstance(args, list) and HOOK_MODULE in args)
 
 
+def hook_installed(root: Path) -> bool:
+    """Is a Rastro hook in this repository's Claude Code settings (local or shared)? An unreadable
+    settings file counts as no."""
+    for shared in (False, True):
+        try:
+            settings = _load(settings_path(root, shared=shared))
+        except AgentInstallError:
+            continue
+        hooks = settings.get("hooks")
+        if isinstance(hooks, dict) and any(
+            _has_ours(group)
+            for groups in hooks.values()
+            if isinstance(groups, list)
+            for group in groups
+        ):
+            return True
+    return False
+
+
 def _load(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}

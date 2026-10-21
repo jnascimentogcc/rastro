@@ -108,7 +108,36 @@ class AgentSession(Base):
     consulted: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+    # Did the agent hook run in this session? NULL = the CLI did not say (older CLI).
+    hook_active: Mapped[bool | None] = mapped_column(Boolean)
     captured_at: Mapped[datetime] = _now()
+
+
+class SessionCoverage(Base):
+    """Which files with rules a session edited, and whether the agent hook announced them first.
+
+    One row per session (not per captured commit): the announcements travel with the first capture of
+    a session, so a session with several commits can only be judged as a whole. Paths and booleans
+    only, no conversation and no rule text."""
+
+    __tablename__ = "session_coverage"
+    __table_args__ = (UniqueConstraint("repository_id", "session_ref"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), nullable=False)
+    session_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # first excerpt
+    computed_at: Mapped[datetime] = _now()
+    hook_active: Mapped[bool | None] = mapped_column(Boolean)  # NULL = unknown
+    edited_ruled: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )  # edited files that had rules
+    consulted_first: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )  # ...announced before the first edit
+    files: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False
+    )  # [{"file", "consulted"}]
 
 
 class Symbol(Base):

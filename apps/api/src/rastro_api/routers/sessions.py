@@ -5,6 +5,7 @@ from sqlalchemy.dialects.postgresql import insert
 from rastro_api.deps import CurrentRepository, DbSession
 from rastro_api.queueing import enqueue
 from rastro_api.schemas import SessionCaptureIn, SessionCaptureOut
+from rastro_db.coverage import recompute_session_coverage
 from rastro_db.models import AgentSession, Commit
 
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
@@ -36,16 +37,26 @@ async def capture_session(
         "git_branch": payload.git_branch,
         "excerpts": [e.model_dump() for e in payload.excerpts],
         "consulted": [c.model_dump() for c in payload.consulted],
+        "hook_active": payload.agent_hook,
     }
     insert_statement = insert(AgentSession).values(**values)
     statement = insert_statement.on_conflict_do_update(  # type: ignore[var-annotated]
         constraint="uq_agent_sessions_commit_session",
         set_={
             k: insert_statement.excluded[k]
-            for k in ("agent", "agent_version", "git_branch", "excerpts", "consulted")
+            for k in (
+                "agent",
+                "agent_version",
+                "git_branch",
+                "excerpts",
+                "consulted",
+                "hook_active",
+            )
         },
     ).returning(AgentSession.id, literal_column("(xmax = 0)").label("created"))
     row = (await session.execute(statement)).one()
+    # Judged for the whole session, in the same transaction as the capture (spec D6).
+    await recompute_session_coverage(session, repository.id, payload.session_ref)
     commit = (
         await session.execute(
             select(Commit.id, Commit.on_default_branch).where(
