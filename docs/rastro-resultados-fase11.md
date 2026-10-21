@@ -219,6 +219,6 @@ Confirmei pela CLI as 5 primeiras regras da fila (`995e23`, `ce19f7`, `3fa603`, 
 
 Leituras:
 
-- **A fila não encurta quando se confirma uma regra sem motivo**: as 5 regras confirmadas continuam na fila com a razão `no_rationale`, só passam para depois das não confirmadas. É o desenho da spec (a fila pede motivo *e* confirmação), mas quem confirma 5 regras e vê o 5 a voltar à lista pode estranhar. Candidato a ajuste no passo de limites: mostrar a razão "só falta o motivo" de forma distinta, ou propor `--why` no comando da regra.
+- **A fila não encurta quando se confirma uma regra sem motivo**: as 5 regras confirmadas continuam na fila com a razão `no_rationale`, só passam para depois das não confirmadas. É o desenho da spec (a fila pede motivo *e* confirmação), mas quem confirma 5 regras e vê o 5 a voltar à lista pode estranhar. **Ajustado a seguir a este teste:** uma regra confirmada e não ultrapassada a que só falta o motivo aparece como "confirmed; only the reason is missing" e o comando proposto passa a ser `rastro rule X --why "<the reason>"` em vez de `--confirm` (confirmar outra vez não mudaria nada). Escrever o motivo pede uma nova confirmação, e o texto di-lo.
 - O R3a só distingue autor e outro revisor com revisões do GitHub em que o autor do PR é conhecido; pela CLI fica `n/a`, como previsto. Continua por verificar num ciclo de PR real.
 - Os dados ficam na base de desenvolvimento (são confirmações reais do utilizador sobre regras reais).

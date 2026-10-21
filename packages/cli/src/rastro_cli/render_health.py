@@ -212,6 +212,10 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
             out.append("  nothing waiting")
         for number, item in enumerate(report["queue"], 1):
             why = [REASON_TEXT.get(reason, reason) for reason in item["reasons"]]
+            if item["reasons"] == ["no_rationale"]:
+                why = [
+                    "confirmed; only the reason is missing (writing it asks for a new confirmation)"
+                ]
             if item["callers"]:
                 why.append(f"{item['callers']} caller(s)")
             statement = textwrap.shorten(item["statement"], 60, placeholder="...")
