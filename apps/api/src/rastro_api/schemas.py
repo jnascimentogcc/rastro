@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -229,6 +229,34 @@ class DefinitionOut(BaseModel):
     not_proof: str
 
 
+class FigureOut(BaseModel):
+    """A figure of a snapshot: the numbers only."""
+
+    numerator: int | None = None
+    denominator: int | None = None
+    value: float | None = None
+    available: bool = True
+    small_sample: bool = False
+
+
+class ComparedToOut(BaseModel):
+    taken_on: date
+    days_ago: int
+    metrics: dict[str, FigureOut]
+
+
+class HealthSnapshotOut(BaseModel):
+    taken_on: date
+    window_days: int
+    definitions_version: int
+    head_sha: str | None
+    figures: dict[str, FigureOut]
+
+
+class HealthHistoryOut(BaseModel):
+    snapshots: list[HealthSnapshotOut]  # most recent first
+
+
 class HealthOut(BaseModel):
     repository_id: uuid.UUID
     generated_at: datetime
@@ -243,4 +271,5 @@ class HealthOut(BaseModel):
     agents: list[MetricOut]
     zones: list[ZoneOut]
     queue: list[QueueItemOut]
+    compared_to: ComparedToOut | None = None  # the oldest comparable snapshot of the window
     definitions: dict[str, DefinitionOut] | None = None

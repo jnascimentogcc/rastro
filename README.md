@@ -281,11 +281,12 @@ in `permissions.allow` is safe. It never exposes the original conversation quote
 rastro health                  # how much of the knowledge is recorded, explained and confirmed
 rastro health --zones          # per directory: symbols, symbols with a rule, rules, confirmed, no reason
 rastro health --queue 10       # what to confirm first (0 hides it)
+rastro health --history        # the daily snapshots, most recent first
 rastro health --explain        # how each figure is computed, where it comes from, what it does not prove
 rastro health --window 60d --exclude "src/legacy/*" --json
 ```
 
-Steps 11.1 to 11.4 report the state of the knowledge base (rules by status, with a known reason, confirmed by a
+Steps 11.1 to 11.5 report the state of the knowledge base (rules by status, with a known reason, confirmed by a
 person, confirmations verified by GitHub or outdated by an edit, age of what nobody confirmed), warns
 when commits were not analysed (failures, budget, quota) because the figures may then be out of date, and
 lists the zones and a review queue. Every figure shows its numerator and denominator; what cannot be known
@@ -297,8 +298,9 @@ author, and the share of integrations with no recorded session. Step 11.3 adds a
 before the first edit (split by whether the hook ran in that session, which the hook now proves with a
 marker at the start of every session), and in how many sessions the hook ran. Step 11.4 notes the code a person looked at when
 confirming a rule, so the report can say how many confirmations the code has overtaken since (and the
-review queue puts them back). The trend figures arrive in the next step; see
-`docs/spec-fase-11-rastro-health.md`.
+review queue puts them back). Step 11.5 adds the trend: the worker stores the figures once a day (no
+model, no rule text), the report says what a figure was in the oldest comparable snapshot of the window, and
+`rastro health --history` lists the days. See `docs/spec-fase-11-rastro-health.md`.
 
 ## Validating rules (phase 9.1)
 

@@ -463,6 +463,9 @@ def health_command(
             "--explain", help="Say how each figure is computed and what it does not prove."
         ),
     ] = False,
+    history: Annotated[
+        bool, typer.Option("--history", help="List the daily snapshots instead of the report.")
+    ] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Print the raw server response.")] = False,
 ) -> None:
     """How much of the repository's knowledge is recorded, explained and confirmed by people."""
@@ -470,6 +473,15 @@ def health_command(
     if not 7 <= days <= 365:
         raise typer.BadParameter("the window must be between 7 and 365 days")
     root, config, token, repository_id = _api_context()
+    if history:
+        snapshots = _call(
+            lambda: client.get_health_history(token, config.api_url, repository_id, limit=30)
+        )
+        if as_json:
+            typer.echo(json.dumps(snapshots, indent=2))
+        else:
+            typer.echo(render_health.render_history(snapshots), nl=False)
+        return
     report = _call(
         lambda: client.get_health(
             token,

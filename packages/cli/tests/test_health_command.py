@@ -169,6 +169,7 @@ class Server:
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
         self.report = REPORT
+        self.history: dict[str, object] = {"snapshots": []}
         self.status = 200
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -180,6 +181,8 @@ class Server:
             return httpx.Response(
                 200, json={**self.report, "definitions": DEFINITIONS if explained else None}
             )
+        if request.url.path == f"/v1/repos/{REPO_ID}/health/history":
+            return httpx.Response(200, json=self.history)
         return httpx.Response(404, json={})
 
     def params(self) -> list[tuple[str, str]]:
@@ -467,3 +470,56 @@ def test_r5_is_shown_after_the_outdated_confirmations_and_the_queue_explains_it(
 
     assert "Code changed after confirming   2 of 5 (40%) - small sample" in out
     assert "the code changed after it was confirmed" in out
+
+
+def test_the_report_says_what_a_figure_was_in_the_snapshot_it_is_compared_with(
+    configured: Path, server: Server
+) -> None:
+    earlier = {
+        "taken_on": "2026-10-01",
+        "days_ago": 20,
+        "metrics": {
+            "R3": {
+                "numerator": 1,
+                "denominator": 27,
+                "value": 0.04,
+                "available": True,
+                "small_sample": False,
+            }
+        },
+    }
+    server.report = {**REPORT, "compared_to": earlier}
+
+    out = runner.invoke(app, ["health"]).output
+
+    assert "against the snapshot of 2026-10-01 (20 days ago)" in out
+    assert "(was 1 of 27)" in out
+
+
+def test_history_lists_the_snapshots(configured: Path, server: Server) -> None:
+    figure = {
+        "numerator": 3,
+        "denominator": 27,
+        "value": 0.11,
+        "available": True,
+        "small_sample": False,
+    }
+    server.history = {
+        "snapshots": [
+            {
+                "taken_on": "2026-10-21",
+                "window_days": 30,
+                "definitions_version": 1,
+                "head_sha": None,
+                "figures": {"R1": {**figure, "numerator": 27, "denominator": None}, "R3": figure},
+            }
+        ]
+    }
+
+    out = runner.invoke(app, ["health", "--history"]).output
+
+    assert "2026-10-21" in out and "3/27" in out
+
+
+def test_history_without_snapshots_says_so(configured: Path, server: Server) -> None:
+    assert "No snapshots yet" in runner.invoke(app, ["health", "--history"]).output

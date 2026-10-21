@@ -1,6 +1,6 @@
 # Resultados da Fase 11: `rastro health`
 
-> Relatório vivo da [spec da Fase 11](spec-fase-11-rastro-health.md). Esta versão cobre os **passos 11.1 (núcleo), 11.2 (processo e proveniência), 11.3 (uso pelos agentes) e 11.4 (validação ultrapassada pelo código)**, feitos a 21/10/2026. As secções dos passos 11.2 a 11.6 acrescentam-se quando existirem.
+> Relatório vivo da [spec da Fase 11](spec-fase-11-rastro-health.md). Esta versão cobre os **passos 11.1 (núcleo), 11.2 (processo e proveniência), 11.3 (uso pelos agentes) e 11.4 (validação ultrapassada pelo código) e 11.5 (instantâneos e tendência)**, feitos a 21/10/2026. As secções dos passos 11.2 a 11.6 acrescentam-se quando existirem.
 
 ## 1. Passo 11.1: núcleo
 
@@ -169,3 +169,26 @@ As 3 regras confirmadas que o `bella-nina` já tinha ficam portanto em "desconhe
 - **Os hashes gravados no merge** são os que a base tem nesse momento. Estão certos porque o `analyze_commit` do commit de merge corre antes da extração (a fila FIFO por repositório garante a ordem); se esse trabalho falhasse, o hash gravado seria o do estado anterior e o R5 acusaria uma mudança que não houve.
 - **Qualquer mudança no corpo de uma função âncora conta**, incluindo as que não alteram o comportamento (o `body_hash` ignora comentários, formatação e nomes locais, mas não literais nem globais referenciados). O R5 diz "ninguém voltou a olhar", não "a regra foi violada".
 - **Pormenor de implementação:** a coluna é `JSONB(none_as_null=True)`; sem isso o `None` do Python fica como `null` JSON e o filtro `IS NOT NULL` não o apanha (apanhei-o num teste: contava como conhecida uma confirmação sem hashes).
+
+## 5. Passo 11.5: instantâneos e tendência
+
+Feito: migração `0015` (`health_snapshots`), tarefa periódica diária, comparação no relatório (`compared_to`), rota `GET /health/history` e `rastro health --history`.
+
+### O que se grava
+
+Uma linha por repositório e dia (`UNIQUE (repository_id, taken_on)`): `window_days`, `definitions_version`, `head_sha` e `metrics` (as figuras de cada métrica: numerador, denominador, valor, disponibilidade, amostra pequena, detalhe em contagens). **Não há texto de regras**, nem zonas, nem fila, nem nada por pessoa. Uma segunda execução no mesmo dia substitui a primeira. O instantâneo usa sempre a janela de 30 dias.
+
+### A tarefa
+
+`health_snapshots` corre às 03:00 e só **distribui o trabalho**: põe na fila um `health_snapshot` por repositório **ativo**, com `queueing_lock` por repositório (sem o bloqueio de repositório dos outros trabalhos, porque só lê). Se um repositório não se consegue pôr na fila, ou o relatório dele falha, os outros seguem (a falha fica no registo). Não chama o modelo.
+
+### A comparação
+
+`compared_to` é o instantâneo **mais antigo dentro da janela** (anterior a hoje) com a **mesma `definitions_version` e a mesma `window_days`**. Se uma fórmula mudar, ou se se pedir outra janela, não há comparação em vez de uma tendência falsa. A CLI escreve "Changes are against the snapshot of AAAA-MM-DD (N days ago)" e, ao lado de cada figura que mudou, "(was N of M)". `rastro health --history` lista os dias, do mais recente para o mais antigo, com R1-R5 (a rota devolve também P2, P3, C1 e C2) e avisa se a definição das figuras mudou dentro do período.
+
+### Decisões e limites
+
+- **Sem preenchimento do histórico:** os instantâneos começam no dia em que a tarefa corre pela primeira vez; não se reconstrói o passado.
+- **Só o trabalhador escreve** instantâneos; o relatório e a rota de histórico não escrevem nada (há um teste).
+- **A comparação é com o mais antigo da janela**, não com o de ontem: lê-se "o que mudou nos últimos 30 dias", que é a pergunta do relatório.
+- Ainda não há dias suficientes de instantâneos no `bella-nina` para uma tendência com sentido; a verificação real fica para o passo 11.6.
