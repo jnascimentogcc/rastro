@@ -305,9 +305,9 @@ repository (checked against GitHub on every action; everybody else is ignored in
 The id is the first 4 or more characters shown next to the proposal; a wrong or ambiguous one gets a
 short answer. Reviewer text is capped at 500 characters, never sent to a model and escaped when shown
 again. Reviews change only the proposals and re-render the comment without calling the model; nothing
-reaches `rules` until phase 9.4 applies them at merge. The reviewer is the verified GitHub login of the
-event, unlike the CLI. **Not yet verified against a real App:** that ticking a box in a bot comment
-arrives as an `issue_comment` `edited` event with the right `sender`; if it does not, use `/rastro ok`.
+reaches `rules` until the merge applies them (next section). The reviewer is the verified GitHub login of the
+event, unlike the CLI. Ticking a box in the bot comment arrives as an `issue_comment` `edited` event with the
+right `sender` (checked against a real App); `/rastro ok` does the same if the box ever does not reach Rastro.
 
 ### What happens at merge (phase 9.4)
 
