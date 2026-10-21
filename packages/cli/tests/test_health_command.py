@@ -525,6 +525,24 @@ def test_history_without_snapshots_says_so(configured: Path, server: Server) -> 
     assert "No snapshots yet" in runner.invoke(app, ["health", "--history"]).output
 
 
+def test_a_confirmed_rule_that_only_lacks_a_reason_is_asked_for_the_reason(
+    configured: Path, server: Server
+) -> None:
+    item = {
+        **REPORT["queue"][0],
+        "reasons": ["no_rationale"],
+        "command": 'rastro rule 2a7851 --why "<the reason>"',
+    }
+    server.report = {**REPORT, "queue": [item]}
+
+    text = runner.invoke(app, ["health"]).output
+    markdown = runner.invoke(app, ["health", "--format", "markdown"]).output
+
+    assert "confirmed; only the reason is missing" in text
+    assert "confirmed; only the reason is missing" in markdown
+    assert '--why "<the reason>"' in text
+
+
 def test_format_markdown_prints_a_markdown_report(configured: Path, server: Server) -> None:
     out = runner.invoke(app, ["health", "--format", "markdown"]).output
 

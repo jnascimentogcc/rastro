@@ -970,7 +970,12 @@ async def _queue(
                 statement=statement,
                 reasons=reasons,
                 callers=int(count or 0),
-                command=f"rastro rule {str(rule_id)[:6]} --confirm",
+                command=(
+                    # confirmed and not outdated: only the reason is missing
+                    f'rastro rule {str(rule_id)[:6]} --why "<the reason>"'
+                    if reasons == ["no_rationale"]
+                    else f"rastro rule {str(rule_id)[:6]} --confirm"
+                ),
             )
         )
     return queue

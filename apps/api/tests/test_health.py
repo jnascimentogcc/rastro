@@ -277,6 +277,8 @@ async def test_the_queue_puts_rules_without_a_reason_first_and_says_why(api: Api
     assert queue[1]["reasons"] == ["no_rationale"]  # confirmed, but nobody knows why
     assert queue[2]["reasons"] == ["validation_outdated"]
     assert queue[0]["command"] == f"rastro rule {str(ids['C'])[:6]} --confirm"
+    # confirmed and only the reason is missing: confirming again would change nothing
+    assert queue[1]["command"] == f'rastro rule {str(ids["E"])[:6]} --why "<the reason>"'
     assert str(ids["A"]) not in {
         item["rule_id"] for item in queue
     }  # reason and confirmation: nothing to do
