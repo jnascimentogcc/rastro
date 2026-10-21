@@ -19,6 +19,16 @@ def _percent(metric: dict[str, Any]) -> str:
     return text + (" - small sample" if metric["small_sample"] else "")
 
 
+def _was(metric: dict[str, Any], earlier: dict[str, Any] | None) -> str:
+    """What the same figure was in the snapshot the report is compared with, when it differs."""
+    before = (earlier or {}).get("metrics", {}).get(metric["id"])
+    if before is None or not before["available"] or not metric["available"]:
+        return ""
+    if (before["numerator"], before["denominator"]) == (metric["numerator"], metric["denominator"]):
+        return ""
+    return f" (was {before['numerator']} of {before['denominator']})"
+
+
 def _explain(definition: dict[str, str] | None, indent: str = "      ") -> list[str]:
     if not definition:
         return []
@@ -50,6 +60,11 @@ def _explain(definition: dict[str, str] | None, indent: str = "      ") -> list[
 
 def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
     definitions: dict[str, Any] = report.get("definitions") or {}
+    earlier = report.get("compared_to")
+
+    def pct(metric: dict[str, Any]) -> str:
+        return _percent(metric) + _was(metric, earlier)
+
     metrics = {metric["id"]: metric for metric in report["knowledge"]}
     window = report["window_days"]
     head = (
@@ -58,6 +73,11 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
         else "no default-branch commit known"
     )
     out = [f"Rastro health  ({head}; pipeline problems of the last {window} days)", ""]
+    if earlier:
+        out += [
+            f"Changes are against the snapshot of {earlier['taken_on']} ({earlier['days_ago']} days ago).",
+            "",
+        ]
     for warning in report["warnings"]:
         out += [textwrap.fill(f"! {warning}", WIDTH, subsequent_indent="  "), ""]
     if explain and report["warnings"]:
@@ -73,7 +93,7 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
     out += _explain(definitions.get("R1")) if explain else []
 
     r2 = metrics["R2"]
-    line = f"  With a known reason             {_percent(r2)}"
+    line = f"  With a known reason             {pct(r2)}"
     if r2["available"]:
         line += (
             f"   {r2['detail']['from_conversation']} from conversations, "
@@ -82,22 +102,22 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
     out.append(line)
     out += _explain(definitions.get("R2")) if explain else []
 
-    out.append(f"  Confirmed by a person           {_percent(metrics['R3'])}")
+    out.append(f"  Confirmed by a person           {pct(metrics['R3'])}")
     out += _explain(definitions.get("R3")) if explain else []
     r3b = metrics["R3b"]
-    out.append(f"    ...verified by GitHub         {_percent(r3b)}")
+    out.append(f"    ...verified by GitHub         {pct(r3b)}")
     out += _explain(definitions.get("R3b")) if explain else []
     r3a = metrics.get("R3a")
     if r3a is not None:
-        out.append(f"    ...by someone other than the PR author  {_percent(r3a)}")
+        out.append(f"    ...by someone other than the PR author  {pct(r3a)}")
         out += _explain(definitions.get("R3a")) if explain else []
 
-    out.append(f"  Confirmation outdated by edits  {_percent(metrics['R4'])}")
+    out.append(f"  Confirmation outdated by edits  {pct(metrics['R4'])}")
     out += _explain(definitions.get("R4")) if explain else []
 
     r5 = metrics.get("R5")
     if r5 is not None:
-        out.append(f"  Code changed after confirming   {_percent(r5)}")
+        out.append(f"  Code changed after confirming   {pct(r5)}")
         out += _explain(definitions.get("R5")) if explain else []
 
     r6 = metrics["R6"]
@@ -115,9 +135,9 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
         out += ["", f"Process (last {window} days)"]
         out.append(f"  Pull requests with proposals    {process['P1']['numerator']}")
         out += _explain(definitions.get("P1")) if explain else []
-        out.append(f"  Reviewed before the merge       {_percent(process['P2'])}")
+        out.append(f"  Reviewed before the merge       {pct(process['P2'])}")
         out += _explain(definitions.get("P2")) if explain else []
-        out.append(f"  Integrated without review       {_percent(process['P3'])}")
+        out.append(f"  Integrated without review       {pct(process['P3'])}")
         out += _explain(definitions.get("P3")) if explain else []
         p4 = process["P4"]
         if p4["available"]:
@@ -132,7 +152,7 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
         if p5["available"]:
             d = p5["detail"]
             out.append(
-                f"  Verdicts                        {_percent(p5)} confirmed as written, "
+                f"  Verdicts                        {pct(p5)} confirmed as written, "
                 f"{d['corrected']} corrected, {d['rejected']} rejected"
             )
         else:
@@ -143,7 +163,7 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
     if agents:
         out += ["", f"Agents (last {window} days)"]
         c1 = agents["C1"]
-        out.append(f"  Files with rules announced first  {_percent(c1)}")
+        out.append(f"  Files with rules announced first  {pct(c1)}")
         if c1["available"]:
             with_hook, without = c1["detail"]["with_hook"], c1["detail"]["without_hook"]
             out.append(
@@ -152,7 +172,7 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
             )
         out += _explain(definitions.get("C1")) if explain else []
         c2 = agents["C2"]
-        line = f"  Sessions where the hook ran       {_percent(c2)}"
+        line = f"  Sessions where the hook ran       {pct(c2)}"
         if c2["available"] and c2["detail"].get("unknown"):
             line += f"   ({c2['detail']['unknown']} session(s) did not say)"
         out.append(line)
@@ -160,7 +180,7 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
 
     for v1 in report.get("intent", []):
         out += ["", f"Code without recorded intent (last {window} days)"]
-        out.append(f"  Integrations with no session    {_percent(v1)}")
+        out.append(f"  Integrations with no session    {pct(v1)}")
         loose = v1["detail"].get("unattributed_commits", 0)
         if loose:
             out.append(
@@ -199,4 +219,32 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
             out.append(f"       {'; '.join(why)}")
             out.append(f"       {item['command']}")
         out += _explain(definitions.get("queue"), "  ") if explain else []
+    return "\n".join(out) + "\n"
+
+
+def render_history(history: dict[str, Any]) -> str:
+    """One line per snapshot, most recent first, with the figures a trend is read from."""
+    snapshots = history["snapshots"]
+    if not snapshots:
+        return "No snapshots yet: the worker takes one a day.\n"
+
+    def cell(figure: dict[str, Any] | None) -> str:
+        if figure is None or not figure["available"]:
+            return "n/a"
+        return f"{figure['numerator']}/{figure['denominator']}"
+
+    columns = [("R2", "reason"), ("R3", "confirmed"), ("R4", "edited"), ("R5", "code changed")]
+    out = ["Rastro health history  (figures as of each day, most recent first)", ""]
+    out.append("  date        rules  " + "  ".join(f"{name:>12}" for _, name in columns))
+    for snapshot in snapshots:
+        figures = snapshot["figures"]
+        rules = figures.get("R1", {}).get("numerator")
+        cells = "  ".join(f"{cell(figures.get(metric_id)):>12}" for metric_id, _ in columns)
+        out.append(f"  {snapshot['taken_on']}  {rules if rules is not None else '?':>5}  {cells}")
+    versions = {snapshot["definitions_version"] for snapshot in snapshots}
+    if len(versions) > 1:
+        out += [
+            "",
+            "! The figures changed definition inside this period: do not read it as a trend.",
+        ]
     return "\n".join(out) + "\n"

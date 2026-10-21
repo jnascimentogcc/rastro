@@ -90,6 +90,16 @@ def get_health(
         return result
 
 
+def get_health_history(
+    token: str, api_url: str, repository_id: str, *, limit: int
+) -> dict[str, Any]:
+    with make_client(token, api_url) as client:
+        response = client.get(f"/v1/repos/{repository_id}/health/history", params={"limit": limit})
+        response.raise_for_status()
+        result: dict[str, Any] = response.json()
+        return result
+
+
 def get_rule(token: str, api_url: str, repository_id: str, rule_id: str) -> dict[str, Any]:
     with make_client(token, api_url) as client:
         response = client.get(f"/v1/repos/{repository_id}/rules/{rule_id}")

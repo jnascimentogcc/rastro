@@ -13,6 +13,7 @@ from rastro_db import create_engine, create_session_factory, generate_token, has
 from rastro_db.models import (
     AgentSession,
     Commit,
+    HealthSnapshot,
     Repository,
     Rule,
     RuleProposal,
@@ -66,6 +67,7 @@ async def api() -> AsyncIterator[ApiContext]:
             await session.execute(
                 delete(SessionCoverage).where(SessionCoverage.repository_id == rid)
             )
+            await session.execute(delete(HealthSnapshot).where(HealthSnapshot.repository_id == rid))
             await session.execute(delete(Rule).where(Rule.repository_id == rid))
             await session.execute(delete(Symbol).where(Symbol.repository_id == rid))
             await session.execute(delete(AgentSession).where(AgentSession.repository_id == rid))

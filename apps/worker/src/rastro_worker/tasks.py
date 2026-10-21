@@ -7,7 +7,16 @@ from githubkit.exception import GitHubException, RequestFailed
 from sqlalchemy import select
 
 from rastro_db.models import Repository
-from rastro_worker import impact, indexing, merged_pr, recovery, resync, review, rule_extraction
+from rastro_worker import (
+    health_snapshot,
+    impact,
+    indexing,
+    merged_pr,
+    recovery,
+    resync,
+    review,
+    rule_extraction,
+)
 from rastro_worker.app import app
 from rastro_worker.deps import get_deps
 from rastro_worker.retry import retry_transient
@@ -72,6 +81,26 @@ async def recover_stalled_jobs(timestamp: int) -> None:
         stalled_timeout=settings.worker_stalled_timeout_seconds,
         max_attempts=settings.job_max_attempts,
     )
+
+
+@app.periodic(cron="0 3 * * *")
+@app.task(name="health_snapshots", queueing_lock="health_snapshots")
+async def health_snapshots(timestamp: int) -> None:
+    """Once a day, queue the health snapshot of every active repository."""
+
+    async def enqueue(repository_id: str) -> None:
+        await health_snapshot_job.configure(
+            queueing_lock=f"health_snapshot:{repository_id}"
+        ).defer_async(repository_id=repository_id)
+
+    queued, failed = await health_snapshot.fan_out(get_deps(), enqueue)
+    logger.info("health snapshots queued for %d repositories (%d failed)", queued, failed)
+
+
+@app.task(name="health_snapshot", retry=retry_transient)
+async def health_snapshot_job(repository_id: str) -> None:
+    """Store today's figures of one repository (no repository lock: it only reads)."""
+    await health_snapshot.snapshot_repository(get_deps(), uuid.UUID(repository_id))
 
 
 @app.task(name="index_repository", retry=retry_transient)

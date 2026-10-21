@@ -9,6 +9,7 @@ from rastro_db import create_engine, create_session_factory
 from rastro_db.models import (
     AgentSession,
     Commit,
+    HealthSnapshot,
     LlmCall,
     PrAnalysis,
     Repository,
@@ -55,6 +56,9 @@ async def worker() -> AsyncIterator[WorkerContext]:
             delete(RuleProposal).where(RuleProposal.repository_id == repository_id)
         )
         await session.execute(delete(RulePreview).where(RulePreview.repository_id == repository_id))
+        await session.execute(
+            delete(HealthSnapshot).where(HealthSnapshot.repository_id == repository_id)
+        )
         await session.execute(delete(Rule).where(Rule.repository_id == repository_id))
         await session.execute(delete(Symbol).where(Symbol.repository_id == repository_id))
         await session.execute(

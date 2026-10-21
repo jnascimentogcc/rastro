@@ -1,13 +1,14 @@
 """SQLAlchemy models. Reference DDL: docs/spec-rastro-mvp.md section 6."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -342,3 +343,24 @@ class LlmCall(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     cost_usd: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = _now()
+
+
+class HealthSnapshot(Base):
+    """The figures of `rastro health` on one day, so the report can say what changed since.
+
+    One row per repository and day. Counts only: no rule text, no conversation, nothing per person.
+    `definitions_version` and `window_days` say how the figures were computed; a report is only
+    compared with snapshots that share both (a changed formula would otherwise read as a trend)."""
+
+    __tablename__ = "health_snapshots"
+    __table_args__ = (UniqueConstraint("repository_id", "taken_on"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), nullable=False)
+    taken_on: Mapped[date] = mapped_column(Date, nullable=False)
+    taken_at: Mapped[datetime] = _now()
+    window_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    definitions_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str | None] = mapped_column(Text)
+    # {"R2": {"numerator", "denominator", "value", "available", "small_sample", "detail"}, ...}
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
