@@ -1,0 +1,38 @@
+Rastro health  (rules of d27aa39; pipeline problems of the last 30 days)
+
+! 2 commit(s) were not analysed because of the cost budget or the model quota: the numbers below may
+  be out of date.
+
+Knowledge base (current state)
+  Active rules                    27   (1 orphaned, 2 rejected)
+  With a known reason             19 of 27 (70%)   6 from conversations, 13 written by people
+  Confirmed by a person           3 of 27 (11%)
+    ...verified by GitHub         1 of 3 (33%) - small sample
+    ...by someone other than the PR author  1 of 2 (50%) - small sample
+  Confirmation outdated by edits  1 of 4 (25%) - small sample
+  Oldest unconfirmed rule         40 days (median 25), 24 rule(s) waiting
+
+Process (last 30 days)
+  Pull requests with proposals    4
+  Reviewed before the merge       3 of 4 (75%) - small sample
+  Integrated without review       1 of 4 (25%) - small sample
+  Time to first review            n/a (fewer than 3 distinct reviewers: a breakdown could point at a person)
+  Verdicts                        5 of 8 (62%) - small sample confirmed as written, 2 corrected, 1 rejected
+
+Agents (last 30 days)
+  Files with rules announced first  9 of 15 (60%)
+    with the hook 9 of 12, without it 0 of 3
+  Sessions where the hook ran       7 of 11 (64%)   (3 session(s) did not say)
+
+Code without recorded intent (last 30 days)
+  Integrations with no session    6 of 14 (43%)
+    40 commit(s) with no session and no pull request are left out: they cannot be told apart from older merge commits
+
+Zones (directories; tests, dependencies and generated code left out)
+  src/domain                   symbols   40, with a rule  12 (30%), rules  10, confirmed   3, no reason   5
+  src/api                      symbols    0, with a rule   0 (n/a), rules   0, confirmed   0, no reason   0
+
+Review queue (what to confirm first)
+  1. 2a7851  Each client may have at most 3 active appointments at the...
+       no reason recorded; not confirmed by a person; 7 caller(s)
+       rastro rule 2a7851 --confirm
