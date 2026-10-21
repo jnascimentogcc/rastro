@@ -443,3 +443,27 @@ def test_explain_covers_the_agent_figures(
     out = runner.invoke(app, ["health", "--explain"]).output
 
     assert "how: formula of C1" in out and "does not prove: limit of C2" in out
+
+
+def test_r5_is_shown_after_the_outdated_confirmations_and_the_queue_explains_it(
+    configured: Path, server: Server
+) -> None:
+    knowledge = [
+        *REPORT["knowledge"],
+        metric("R5", "Code changed after confirming", 2, 5, detail={"unknown": 2}),
+    ]
+    queue = [
+        {
+            "rule_id": RULE_ID,
+            "statement": "Implants cannot be booked on Friday afternoon",
+            "reasons": ["validation_outdated_by_code"],
+            "callers": 0,
+            "command": "rastro rule 2a7851 --confirm",
+        }
+    ]
+    server.report = {**REPORT, "knowledge": knowledge, "queue": queue}
+
+    out = runner.invoke(app, ["health"]).output
+
+    assert "Code changed after confirming   2 of 5 (40%) - small sample" in out
+    assert "the code changed after it was confirmed" in out

@@ -30,6 +30,7 @@ from rastro_api.schemas import (
     SnapshotRuleOut,
     Validation,
 )
+from rastro_db.anchors import current_anchor_hashes
 from rastro_db.budget import budget_exhausted
 from rastro_db.models import AgentSession, Commit, Rule, RuleAnchor, RuleOrigin, RuleReview
 from rastro_db.models import Symbol as SymbolRow
@@ -286,6 +287,11 @@ async def review_rule(
             verdict=body.verdict,
             reviewer=body.reviewer,
             reviewer_source="cli",
+            anchor_hashes=(
+                await current_anchor_hashes(session, rule.id)
+                if body.verdict in ("confirmed", "corrected")
+                else None
+            ),
             statement_after=rule.statement if body.verdict == "corrected" else None,
             rationale_after=body.rationale,
             note=body.note,

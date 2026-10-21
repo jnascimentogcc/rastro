@@ -193,3 +193,41 @@ async def test_reviews_are_limited_to_the_own_repository_and_need_the_token(
 
     assert (foreign.status_code, unknown.status_code) == (404, 404)
     assert anonymous.status_code in (401, 403)
+
+
+async def stored_hashes(
+    api: ApiContext, rule_id: uuid.UUID
+) -> list[tuple[str, dict[str, str] | None]]:
+    async with create_session_factory(api.engine)() as session:
+        rows = await session.execute(
+            select(RuleReview.verdict, RuleReview.anchor_hashes)
+            .where(RuleReview.rule_id == rule_id)
+            .order_by(RuleReview.created_at)
+        )
+        return [(verdict, hashes) for verdict, hashes in rows]
+
+
+async def test_confirming_and_correcting_record_the_code_that_was_looked_at(
+    api: ApiContext,
+) -> None:
+    ids = await seed(api)
+
+    await post(api, ids["implants"], verdict="confirmed")
+    await post(api, ids["implants"], verdict="corrected", statement=IMPLANTS + " (always)")
+
+    confirmed, corrected = await stored_hashes(api, ids["implants"])
+    # the seeded rule is anchored to src/agenda.ts::validate and its copy src/calendar.ts::isAllowed
+    assert confirmed[1] == {
+        "src/agenda.ts::validate": "h-src/agenda.ts-validate",
+        "src/calendar.ts::isAllowed": "h-src/calendar.ts-isAllowed",
+    }
+    assert corrected[1] == confirmed[1]
+
+
+async def test_rejecting_and_adding_a_reason_record_no_code(api: ApiContext) -> None:
+    ids = await seed(api)
+
+    await post(api, ids["discount"], verdict="rationale_added", rationale="The salon loses margin")
+    await post(api, ids["discount"], verdict="rejected")
+
+    assert [hashes for _, hashes in await stored_hashes(api, ids["discount"])] == [None, None]

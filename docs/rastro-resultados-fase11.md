@@ -1,6 +1,6 @@
 # Resultados da Fase 11: `rastro health`
 
-> Relatório vivo da [spec da Fase 11](spec-fase-11-rastro-health.md). Esta versão cobre os **passos 11.1 (núcleo), 11.2 (processo e proveniência) e 11.3 (uso pelos agentes)**, feitos a 21/10/2026. As secções dos passos 11.2 a 11.6 acrescentam-se quando existirem.
+> Relatório vivo da [spec da Fase 11](spec-fase-11-rastro-health.md). Esta versão cobre os **passos 11.1 (núcleo), 11.2 (processo e proveniência), 11.3 (uso pelos agentes) e 11.4 (validação ultrapassada pelo código)**, feitos a 21/10/2026. As secções dos passos 11.2 a 11.6 acrescentam-se quando existirem.
 
 ## 1. Passo 11.1: núcleo
 
@@ -133,3 +133,39 @@ Com o Claude Code real: `rastro agent install`, uma sessão a pedir um comentár
 ### Poluição da base de testes
 
 A execução dos testes da API deixou 12 repositórios `acme/clinic` na base de desenvolvimento quando o `conftest` ainda não limpava `session_coverage` nem `rule_proposals` (falha de limpeza, não do produto). Foram apagados à mão e o `conftest` passou a limpar ambas as tabelas.
+
+## 4. Passo 11.4: a validação ultrapassada pelo código
+
+Feito: migração `0014` (`rule_reviews.anchor_hashes`), o registo do código que a pessoa viu ao confirmar, a figura R5 e a fila de revisão a incluir estas regras.
+
+### O que passou a ser gravado
+
+Quando alguém **confirma ou corrige** uma regra, grava-se `{"caminho::nome qualificado": body_hash}` de cada âncora ativa da regra nesse momento. A chave é o caminho e o nome, e não o id do símbolo, porque o `resync` passa a âncora para um símbolo sucessor com outro id quando o código é renomeado ou movido. Rejeições e motivos acrescentados (`rationale_added`) não gravam nada: não são confirmações.
+
+A spec falava de **três** caminhos de revisão. Na prática são **dois** que escrevem a linha de validação: a aplicação das propostas no merge (`reviewer_source = 'github'`) e a rota da CLI. As caixas e os comandos `/rastro` do GitHub só movem propostas entre estados; é no merge que viram `rule_reviews`, por isso o caminho do GitHub fica coberto pelo do merge.
+
+### R5
+
+Das regras ativas confirmadas, quantas têm hoje, em alguma âncora, um `body_hash` diferente do que a pessoa viu. Detalhes:
+
+- Conta-se a confirmação mais recente da revisão validada: uma regra reconfirmada depois de o código mudar já não conta.
+- Uma cópia duplicada que divergiu conta, e um símbolo que desapareceu não (a regra fica órfã e aparece em R1).
+- As confirmações sem hashes (as anteriores a esta fase, ou sem âncoras ativas) ficam em "desconhecidas" e fora do denominador; se não houver nenhuma com hashes, o R5 diz `n/a` com a razão.
+- Uma regra ultrapassada entra na fila de revisão com o motivo `validation_outdated_by_code`, mesmo tendo razão e confirmação.
+
+### Verificação no `bella-nina` real
+
+Num ciclo completo contra a pilha reconstruída:
+
+1. `rastro rule 995e23 --confirm` (confirmação pela CLI): `rastro health` passou a mostrar "Confirmed by a person 4 of 27" e **"Code changed after confirming 0 of 1"**.
+2. Alterei o `body_hash` de um símbolo âncora dessa regra, a simular uma edição do código: o R5 passou a **1 of 1 (100%)**.
+3. Repus tudo (hashes, a linha de revisão e a validação da regra); o relatório voltou a "3 of 27" e a R5 `n/a`, porque as 3 confirmações que já existiam são anteriores aos hashes.
+
+As 3 regras confirmadas que o `bella-nina` já tinha ficam portanto em "desconhecidas" para sempre: confirmações antigas não se retro-preenchem, porque não se sabe que código a pessoa viu.
+
+### Decisões e limites
+
+- **Não há preenchimento do histórico** (decisão da spec): usar o código de hoje diria que "nada mudou" a regras cujo código pode ter mudado.
+- **Os hashes gravados no merge** são os que a base tem nesse momento. Estão certos porque o `analyze_commit` do commit de merge corre antes da extração (a fila FIFO por repositório garante a ordem); se esse trabalho falhasse, o hash gravado seria o do estado anterior e o R5 acusaria uma mudança que não houve.
+- **Qualquer mudança no corpo de uma função âncora conta**, incluindo as que não alteram o comportamento (o `body_hash` ignora comentários, formatação e nomes locais, mas não literais nem globais referenciados). O R5 diz "ninguém voltou a olhar", não "a regra foi violada".
+- **Pormenor de implementação:** a coluna é `JSONB(none_as_null=True)`; sem isso o `None` do Python fica como `null` JSON e o filtro `IS NOT NULL` não o apanha (apanhei-o num teste: contava como conhecida uma confirmação sem hashes).

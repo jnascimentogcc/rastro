@@ -24,6 +24,7 @@ from rastro_code_analysis import (
     symbol_source,
     touched_symbols,
 )
+from rastro_db.anchors import current_anchor_hashes
 from rastro_db.models import (
     AgentSession,
     Commit,
@@ -970,6 +971,8 @@ async def _record_review(
                 reviewer_source="github",
                 reviewer_is_session_author=is_author,
                 reviewer_is_pr_author=is_pr_author(review.reviewer),
+                # what the person looked at, for a confirmation or a correction only
+                anchor_hashes=await current_anchor_hashes(session, rule_id) if validated else None,
                 statement_after=item.rule.statement if review.state == "corrected" else None,
                 rationale_after=item.rationale if review.rationale_by else None,
                 pr_number=review.pr_number,

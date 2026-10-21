@@ -8,6 +8,7 @@ REASON_TEXT = {
     "no_rationale": "no reason recorded",
     "not_validated": "not confirmed by a person",
     "validation_outdated": "confirmation outdated by an edit",
+    "validation_outdated_by_code": "the code changed after it was confirmed",
 }
 
 
@@ -93,6 +94,11 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
 
     out.append(f"  Confirmation outdated by edits  {_percent(metrics['R4'])}")
     out += _explain(definitions.get("R4")) if explain else []
+
+    r5 = metrics.get("R5")
+    if r5 is not None:
+        out.append(f"  Code changed after confirming   {_percent(r5)}")
+        out += _explain(definitions.get("R5")) if explain else []
 
     r6 = metrics["R6"]
     if r6["available"]:

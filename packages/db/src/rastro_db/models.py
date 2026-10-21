@@ -224,6 +224,10 @@ class RuleReview(Base):
     # Compares two GitHub logins: the reviewer and the author of the pull request. True or False for
     # GitHub reviews once the PR author is known; NULL for CLI reviews (unverified) and older rows.
     reviewer_is_pr_author: Mapped[bool | None] = mapped_column(Boolean)
+    # For a confirmation or a correction: the code the person looked at, as
+    # {"path::qualified.name": body_hash} for every active anchor of the rule at that moment. Lets
+    # `rastro health` tell when the code changed after the confirmation. NULL = not recorded (older rows).
+    anchor_hashes: Mapped[dict[str, str] | None] = mapped_column(JSONB(none_as_null=True))
     statement_after: Mapped[str | None] = mapped_column(Text)
     rationale_after: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
