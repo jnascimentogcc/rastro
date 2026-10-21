@@ -8,7 +8,7 @@ cannot disagree.
 Step 11.1 covers the knowledge base (R1-R4, R6, R3b by origin only), the pipeline warning (V2), the
 zones and the review queue. Step 11.2 adds R3a (confirmed by someone other than the PR author), the
 process figures P1-P5 and the source of intent V1, which need the PR author and the commit-to-PR link
-that the webhook jobs started recording in migration 0012. Agent use (C) and R5 come later.
+that the webhook jobs started recording in migration 0012. Step 11.3 adds agent use (C1, C2) from `session_coverage`, computed when a capture arrives. R5 comes later.
 """
 
 import fnmatch
@@ -27,6 +27,7 @@ from rastro_db.models import (
     RuleAnchor,
     RuleProposal,
     RuleReview,
+    SessionCoverage,
     SymbolCall,
 )
 from rastro_db.models import Symbol as SymbolRow
@@ -137,6 +138,25 @@ DEFINITIONS: dict[str, dict[str, str]] = {
             f"Shown only with at least {MIN_REVIEWERS} distinct reviewers"
         ),
     },
+    "C1": {
+        "title": "Files with rules announced before they were edited",
+        "formula": (
+            "per session: files edited that already had rules when the session began and that the agent "
+            "hook announced before the first edit / files edited that already had rules; summed over the "
+            "sessions of the window whose hook state is known"
+        ),
+        "source": "session_coverage (computed when a capture arrives)",
+        "not_proof": (
+            "Only the files of the commit are counted. Edits made with Bash and no Read count as not "
+            "announced, which is the gap this figure exists to show. Without the hook nothing is announced"
+        ),
+    },
+    "C2": {
+        "title": "Sessions where the hook ran",
+        "formula": "sessions of the window whose session-start marker arrived / sessions with the state known",
+        "source": "session_coverage.hook_active",
+        "not_proof": 'It separates "nothing was announced" from "the hook did not run"',
+    },
     "V1": {
         "title": "Integrations with no recorded intent",
         "formula": (
@@ -224,6 +244,7 @@ class HealthReport:
     knowledge: list[Metric]
     process: list[Metric]
     intent: list[Metric]
+    agents: list[Metric]
     zones: list[Zone]
     queue: list[QueueItem]
 
@@ -279,6 +300,7 @@ async def build_report(
     window_start = now - timedelta(days=window_days)
     process = await _process(session, repository_id, window_start)
     intent = [await _intent(session, repository_id, window_start)]
+    agents = await _agents(session, repository_id, window_start)
     pipeline = await _pipeline(session, repository_id, now, window_days)
     warnings = _warnings(pipeline)
     head_sha = await session.scalar(
@@ -300,6 +322,7 @@ async def build_report(
         knowledge=knowledge,
         process=process,
         intent=intent,
+        agents=agents,
         zones=zones,
         queue=queue,
     )
@@ -621,6 +644,65 @@ async def _intent(
         na_reason="no integration in the window",
         detail=detail,
     )
+
+
+# --------------------------------------------------------------------------- agent use (C)
+
+
+async def _agents(
+    session: AsyncSession, repository_id: uuid.UUID, window_start: datetime
+) -> list[Metric]:
+    cov = SessionCoverage
+    known = cov.hook_active.is_not(None)
+    row = (
+        await session.execute(
+            select(
+                func.count(),
+                func.count().filter(cov.hook_active.is_(True)),
+                func.count().filter(known),
+                func.coalesce(func.sum(cov.consulted_first).filter(known), 0),
+                func.coalesce(func.sum(cov.edited_ruled).filter(known), 0),
+                func.coalesce(func.sum(cov.consulted_first).filter(cov.hook_active.is_(True)), 0),
+                func.coalesce(func.sum(cov.edited_ruled).filter(cov.hook_active.is_(True)), 0),
+            ).where(cov.repository_id == repository_id, cov.started_at >= window_start)
+        )
+    ).one()
+    total, with_hook, with_known, consulted, edited, consulted_hook, edited_hook = (
+        int(v) for v in row
+    )
+    unknown = total - with_known
+    if edited == 0:
+        reason = (
+            "the CLI did not say whether the hook ran in these sessions (older CLI)"
+            if total and not with_known
+            else "no session in the window edited a file that already had rules"
+        )
+    else:
+        reason = ""
+    c1 = ratio(
+        "C1",
+        "Files with rules announced before they were edited",
+        consulted,
+        edited,
+        na_reason=reason,
+        detail={
+            "with_hook": {"announced": consulted_hook, "edited": edited_hook},
+            "without_hook": {
+                "announced": consulted - consulted_hook,
+                "edited": edited - edited_hook,
+            },
+            "sessions_with_unknown_hook": unknown,
+        },
+    )
+    c2 = ratio(
+        "C2",
+        "Sessions where the hook ran",
+        with_hook,
+        with_known,
+        na_reason="no session in the window says whether the hook ran",
+        detail={"unknown": unknown},
+    )
+    return [c1, c2]
 
 
 # --------------------------------------------------------------------------- pipeline

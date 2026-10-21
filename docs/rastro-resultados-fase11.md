@@ -1,6 +1,6 @@
 # Resultados da Fase 11: `rastro health`
 
-> Relatório vivo da [spec da Fase 11](spec-fase-11-rastro-health.md). Esta versão cobre os **passos 11.1 (núcleo) e 11.2 (processo e proveniência)**, feitos a 21/10/2026. As secções dos passos 11.2 a 11.6 acrescentam-se quando existirem.
+> Relatório vivo da [spec da Fase 11](spec-fase-11-rastro-health.md). Esta versão cobre os **passos 11.1 (núcleo), 11.2 (processo e proveniência) e 11.3 (uso pelos agentes)**, feitos a 21/10/2026. As secções dos passos 11.2 a 11.6 acrescentam-se quando existirem.
 
 ## 1. Passo 11.1: núcleo
 
@@ -87,3 +87,49 @@ O que isto diz da equipa de demonstração: todas as propostas foram revistas an
 - **Commits diretos sem sessão ficam fora do rácio de V1** (`unattributed_commits`), contra a spec original, que os contava como "sem intenção registada". Na base real não se distinguem de commits de merge anteriores à coluna `merged_pr_number`, e contá-los daria 68% de código "sem intenção" que na maior parte não o é. Quando houver histórico suficiente depois de `0012`, pode voltar a entrar.
 - **Uma unidade é datada pelo commit mais recente**, porque os commits do PR são mais antigos do que o merge que os integra; sem isto um squash recente apareceria sozinho, sem as sessões dos commits originais.
 - **Falta testar ao vivo** o caminho completo (um PR novo no `bella-nina` com três revisores diferentes), que é o que dá números a R3a, P4 e P5. Os testes automáticos cobrem cada passo: webhook com e sem `user`, `pr_author` só em propostas vazias, marca do revisor verdadeira, falsa e nula, `merged_pr_number` nos commits e no commit de squash, e cada figura sobre dados feitos à mão.
+
+## 3. Passo 11.3: uso pelos agentes
+
+Feito: migração `0013`, o marcador de arranque do hook, a cobertura calculada por sessão quando chega uma captura, e as figuras C1 e C2.
+
+### O que passou a ser gravado
+
+| Facto | Onde | Como |
+|---|---|---|
+| O hook correu nesta sessão | linha `via: "start"` em `.rastro/consulted.jsonl` | o `session-start` acrescenta-a sempre que corre num repositório com `.rastro` (`startup`, `resume`, `clear` e `compact`), mesmo sem regras nem cache |
+| Estado do hook por captura | `agent_sessions.hook_active` | a captura envia `agent_hook = true` se encontra o marcador da sessão; `false` se há hook instalado nas definições (locais ou partilhadas) e o marcador não veio; omite o campo se não há hook instalado |
+| Cobertura da sessão | tabela `session_coverage` (uma linha por sessão) | recalculada dentro do `POST /v1/sessions` com todas as capturas da mesma sessão |
+
+### Como se calcula a cobertura
+
+Por **sessão**, e não por captura, porque as consultas seguem com a primeira captura de uma sessão: o 2.º commit da mesma sessão chegaria com a lista vazia e daria 0%. Um ficheiro conta quando foi editado e já tinha uma regra ativa, com âncora ativa, **criada antes da primeira edição** (`rules.created_at`, e não o estado de hoje, para um envio atrasado não contar regras escritas entretanto). Foi consultado quando houve um anúncio (`read` ou `deny`) desse ficheiro não posterior à primeira edição; os caminhos comparam-se sem distinguir maiúsculas nem barras. O estado do hook da sessão é verdadeiro se alguma captura o provou, falso se todas as que disseram algo disseram falso, e desconhecido nos restantes casos (CLI antiga).
+
+### As figuras
+
+- **C1:** ficheiros com regras anunciados antes de editados, somado sobre as sessões da janela cujo estado do hook é conhecido, repartido entre sessões com e sem o hook. As sessões com estado desconhecido aparecem à parte e não contam como zero.
+- **C2:** sessões em que o hook correu, sobre as que têm o estado conhecido.
+- Sem edições de ficheiros com regras, ou sem nenhuma CLI que diga o estado, o relatório diz-o em vez de mostrar 0%.
+
+### Verificação ponta a ponta no `bella-nina`
+
+Com o Claude Code real: `rastro agent install`, uma sessão a pedir um comentário numa função com regra (`hasReachedRescheduleLimit`), commit (que dispara a captura), e `rastro health`.
+
+- O registo do hook teve o marcador de arranque às 12:44:05 e o anúncio de `src/domain/scheduling.ts` 7 segundos depois, **antes** da edição. O modelo disse, na resposta final, que o Rastro avisou que a função implementa a regra das 2 remarcações validada por uma pessoa e que, como só a documentava, não pediu confirmação.
+- Na base de dados: `agent_sessions.hook_active = true`, 2 anúncios guardados e uma linha em `session_coverage` com `edited_ruled = 1`, `consulted_first = 1` e `[{"file": "src/domain/scheduling.ts", "consulted": true}]`.
+- `rastro health` mostra "Files with rules announced first 1 of 1 (100%) - small sample" e "Sessions where the hook ran 1 of 1 (100%)". Os dados desta verificação (sessão, captura e linha de cobertura) foram apagados da base de desenvolvimento depois.
+
+### Desvios da spec
+
+- **`session_coverage` tem uma coluna `started_at`** (primeiro excerto da sessão), que a spec não previa: é com ela que se aplica a janela, porque `computed_at` muda de cada vez que se recalcula.
+- **C1 exclui as sessões com estado do hook desconhecido**, em vez de as contar como não consultadas, para a cobertura não parecer pior só porque a CLI era antiga (spec D4). A repartição com e sem hook fica visível.
+- **O marcador de arranque também conta em `clear` e `compact`**, não só em `startup`: nesses casos o hook voltou a correr, e é prova igualmente válida.
+
+### Limites
+
+- Só entram os ficheiros do commit (a captura só guarda as edições que tocam os ficheiros do commit); uma sessão que editou ficheiros com regras mas só fez commit de outros não os conta.
+- Edições por `Bash` sem `Read` contam como não anunciadas, que é a lacuna que a figura quer mostrar.
+- Uma amostra de uma sessão não diz nada ainda: a cobertura real só se lê depois de várias sessões com o hook instalado.
+
+### Poluição da base de testes
+
+A execução dos testes da API deixou 12 repositórios `acme/clinic` na base de desenvolvimento quando o `conftest` ainda não limpava `session_coverage` nem `rule_proposals` (falha de limpeza, não do produto). Foram apagados à mão e o `conftest` passou a limpar ambas as tabelas.

@@ -20,9 +20,15 @@ class ConsultedIn(BaseModel):
 
     at: str = Field(max_length=40)
     agent: str | None = Field(default=None, max_length=100)  # set for a subagent
-    file: str = Field(min_length=1, max_length=500)
-    rule_ids: list[str] = Field(max_length=20)
-    via: Literal["read", "deny"]
+    file: str = Field(default="", max_length=500)  # empty only for the session-start marker
+    rule_ids: list[str] = Field(default_factory=list, max_length=20)
+    via: Literal["read", "deny", "start"]  # "start": the hook ran when the session began
+
+    @model_validator(mode="after")
+    def _file_unless_start(self) -> "ConsultedIn":
+        if self.via != "start" and not self.file:
+            raise ValueError("an announcement needs the file it was about")
+        return self
 
     @field_validator("rule_ids")
     @classmethod
@@ -44,6 +50,8 @@ class SessionCaptureIn(BaseModel):
     consulted: list[ConsultedIn] = Field(
         default_factory=list, max_length=2000
     )  # older CLIs omit it
+    # Did the agent hook run in this session? None = the CLI cannot tell (older CLI, no hook installed)
+    agent_hook: bool | None = None
 
     @field_validator("commit_sha")
     @classmethod
@@ -232,6 +240,7 @@ class HealthOut(BaseModel):
     knowledge: list[MetricOut]
     process: list[MetricOut]
     intent: list[MetricOut]
+    agents: list[MetricOut]
     zones: list[ZoneOut]
     queue: list[QueueItemOut]
     definitions: dict[str, DefinitionOut] | None = None

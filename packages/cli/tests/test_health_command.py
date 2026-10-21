@@ -96,6 +96,20 @@ REPORT: dict[str, Any] = {
             detail={"confirmed": 5, "corrected": 2, "rejected": 1},
         ),
     ],
+    "agents": [
+        metric(
+            "C1",
+            "Files announced first",
+            9,
+            15,
+            detail={
+                "with_hook": {"announced": 9, "edited": 12},
+                "without_hook": {"announced": 0, "edited": 3},
+                "sessions_with_unknown_hook": 3,
+            },
+        ),
+        metric("C2", "Sessions where the hook ran", 7, 11, detail={"unknown": 3}),
+    ],
     "intent": [
         metric(
             "V1",
@@ -280,6 +294,7 @@ def test_a_figure_that_cannot_be_known_says_why_instead_of_showing_zero(
         "queue": [],
         "process": [],
         "intent": [],
+        "agents": [],
     }
 
     out = runner.invoke(app, ["health"]).output
@@ -397,3 +412,34 @@ def test_explain_covers_the_new_figures(
 
     for key in keys:
         assert f"how: formula of {key}" in out
+
+
+def test_the_agents_section_separates_having_the_hook_from_using_it(
+    configured: Path, server: Server
+) -> None:
+    out = runner.invoke(app, ["health"]).output
+
+    assert "Agents (last 30 days)" in out
+    assert "Files with rules announced first  9 of 15 (60%)" in out
+    assert "with the hook 9 of 12, without it 0 of 3" in out
+    assert "Sessions where the hook ran       7 of 11 (64%)   (3 session(s) did not say)" in out
+
+
+def test_explain_covers_the_agent_figures(
+    configured: Path, server: Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for key in ("C1", "C2"):
+        monkeypatch.setitem(
+            DEFINITIONS,
+            key,
+            {
+                "title": key,
+                "formula": f"formula of {key}",
+                "source": f"source of {key}",
+                "not_proof": f"limit of {key}",
+            },
+        )
+
+    out = runner.invoke(app, ["health", "--explain"]).output
+
+    assert "how: formula of C1" in out and "does not prove: limit of C2" in out

@@ -133,6 +133,25 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
             out.append(f"  Verdicts                        n/a ({p5['na_reason']})")
         out += _explain(definitions.get("P5")) if explain else []
 
+    agents = {metric["id"]: metric for metric in report.get("agents", [])}
+    if agents:
+        out += ["", f"Agents (last {window} days)"]
+        c1 = agents["C1"]
+        out.append(f"  Files with rules announced first  {_percent(c1)}")
+        if c1["available"]:
+            with_hook, without = c1["detail"]["with_hook"], c1["detail"]["without_hook"]
+            out.append(
+                f"    with the hook {with_hook['announced']} of {with_hook['edited']}, "
+                f"without it {without['announced']} of {without['edited']}"
+            )
+        out += _explain(definitions.get("C1")) if explain else []
+        c2 = agents["C2"]
+        line = f"  Sessions where the hook ran       {_percent(c2)}"
+        if c2["available"] and c2["detail"].get("unknown"):
+            line += f"   ({c2['detail']['unknown']} session(s) did not say)"
+        out.append(line)
+        out += _explain(definitions.get("C2")) if explain else []
+
     for v1 in report.get("intent", []):
         out += ["", f"Code without recorded intent (last {window} days)"]
         out.append(f"  Integrations with no session    {_percent(v1)}")

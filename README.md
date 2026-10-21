@@ -285,7 +285,7 @@ rastro health --explain        # how each figure is computed, where it comes fro
 rastro health --window 60d --exclude "src/legacy/*" --json
 ```
 
-Steps 11.1 and 11.2 report the state of the knowledge base (rules by status, with a known reason, confirmed by a
+Steps 11.1 to 11.3 report the state of the knowledge base (rules by status, with a known reason, confirmed by a
 person, confirmations verified by GitHub or outdated by an edit, age of what nobody confirmed), warns
 when commits were not analysed (failures, budget, quota) because the figures may then be out of date, and
 lists the zones and a review queue. Every figure shows its numerator and denominator; what cannot be known
@@ -293,7 +293,9 @@ is `n/a` with the reason, never 0%, and fewer than 10 cases are flagged as a sma
 model call and says nothing about individual people. Step 11.2 adds the process (proposals reviewed before
 the merge or integrated without review, verdicts on the extraction, withheld with fewer than three
 reviewers so they cannot point at a person), the share of confirmations made by someone other than the PR
-author, and the share of integrations with no recorded session. The agent-use and trend figures arrive in
+author, and the share of integrations with no recorded session. Step 11.3 adds agent use: of the files with rules that a session edited, how many the hook had announced
+before the first edit (split by whether the hook ran in that session, which the hook now proves with a
+marker at the start of every session), and in how many sessions the hook ran. The trend figures arrive in
 the next steps; see `docs/spec-fase-11-rastro-health.md`.
 
 ## Validating rules (phase 9.1)

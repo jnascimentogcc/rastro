@@ -6,7 +6,7 @@ import httpx
 import pytest
 from cli_support import commit_file
 
-from rastro_cli import client, hook_entry, rules_cache
+from rastro_cli import agent_install, client, hook_entry, rules_cache
 from rastro_cli.capture import (
     attach_consulted,
     consulted_path,
@@ -200,3 +200,55 @@ def test_from_the_hook_to_the_upload_no_rule_text_travels(
     assert body["consulted"][0]["via"] == "read"
     assert "SECRET BUSINESS STATEMENT" not in json.dumps(body)
     assert "SECRET REASON" not in json.dumps(body)
+
+
+def start_line(session: str, at: str = NOW) -> str:
+    return entry(session, file="", via="start", rule_ids=[], at=at)
+
+
+def test_a_start_marker_proves_the_hook_ran_and_travels_with_the_capture(
+    scenario: tuple[Path, str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, sha, projects = scenario
+    write_log(repo, start_line("sess-42"), entry("sess-42"))
+    seen = serve(monkeypatch)
+
+    run_capture(repo, sha, projects)
+
+    body = json.loads(seen[0].content)
+    assert body["agent_hook"] is True
+    assert [item["via"] for item in body["consulted"]] == ["start", "read"]
+    assert remaining(repo) == []
+
+
+def test_an_installed_hook_that_left_no_marker_is_reported_as_not_having_run(
+    scenario: tuple[Path, str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, sha, projects = scenario
+    agent_install.install(repo, shared=False, python="python")
+    seen = serve(monkeypatch)
+
+    run_capture(repo, sha, projects)
+
+    assert json.loads(seen[0].content)["agent_hook"] is False
+
+
+def test_without_a_hook_the_field_is_left_out_because_nobody_can_tell(
+    scenario: tuple[Path, str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, sha, projects = scenario
+    seen = serve(monkeypatch)
+
+    run_capture(repo, sha, projects)
+
+    assert "agent_hook" not in json.loads(seen[0].content)
+
+
+def test_hook_installed_looks_at_the_local_and_the_shared_settings(tmp_path: Path) -> None:
+    assert agent_install.hook_installed(tmp_path) is False
+    agent_install.install(tmp_path, shared=True, python="python")
+    assert agent_install.hook_installed(tmp_path) is True
+    agent_install.uninstall(tmp_path, shared=True)
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude" / "settings.local.json").write_text("{broken", encoding="utf-8")
+    assert agent_install.hook_installed(tmp_path) is False  # an unreadable file counts as no
