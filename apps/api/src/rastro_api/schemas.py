@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -183,3 +183,53 @@ class RulesSnapshotOut(BaseModel):
     generated_at: datetime
     truncated: bool
     rules: list[SnapshotRuleOut]
+
+
+class MetricOut(BaseModel):
+    id: str
+    label: str
+    numerator: int | None = None
+    denominator: int | None = None
+    value: float | None = None
+    available: bool = True
+    na_reason: str | None = None  # why a figure cannot be given: never shown as 0%
+    small_sample: bool = False
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class ZoneOut(BaseModel):
+    name: str
+    symbols: int
+    symbols_with_rule: int
+    rules: int
+    validated: int
+    without_reason: int
+
+
+class QueueItemOut(BaseModel):
+    rule_id: uuid.UUID
+    statement: str
+    reasons: list[str]  # no_rationale | not_validated | validation_outdated
+    callers: int
+    command: str
+
+
+class DefinitionOut(BaseModel):
+    title: str
+    formula: str
+    source: str
+    not_proof: str
+
+
+class HealthOut(BaseModel):
+    repository_id: uuid.UUID
+    generated_at: datetime
+    window_days: int
+    head_sha: str | None
+    definitions_version: int
+    warnings: list[str]
+    pipeline: dict[str, int]
+    knowledge: list[MetricOut]
+    zones: list[ZoneOut]
+    queue: list[QueueItemOut]
+    definitions: dict[str, DefinitionOut] | None = None

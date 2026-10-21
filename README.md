@@ -275,6 +275,24 @@ and `rastro_get_rule(rule_id)`. All three only read and are marked `readOnlyHint
 in `permissions.allow` is safe. It never exposes the original conversation quotes. See `docs/spec-fase-10-consulta-agente.md` and
 `docs/rastro-resultados-fase10.md`.
 
+## Health report (phase 11, in progress)
+
+```bash
+rastro health                  # how much of the knowledge is recorded, explained and confirmed
+rastro health --zones          # per directory: symbols, symbols with a rule, rules, confirmed, no reason
+rastro health --queue 10       # what to confirm first (0 hides it)
+rastro health --explain        # how each figure is computed, where it comes from, what it does not prove
+rastro health --window 60d --exclude "src/legacy/*" --json
+```
+
+Step 11.1 reports the state of the knowledge base (rules by status, with a known reason, confirmed by a
+person, confirmations verified by GitHub or outdated by an edit, age of what nobody confirmed), warns
+when commits were not analysed (failures, budget, quota) because the figures may then be out of date, and
+lists the zones and a review queue. Every figure shows its numerator and denominator; what cannot be known
+is `n/a` with the reason, never 0%, and fewer than 10 cases are flagged as a small sample. It makes no
+model call and says nothing about individual people. The process, agent-use and trend figures arrive in
+the next steps; see `docs/spec-fase-11-rastro-health.md`.
+
 ## Validating rules (phase 9.1)
 
 A human can say whether a rule is right. This is a separate fact from the model's confidence.

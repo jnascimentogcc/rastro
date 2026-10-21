@@ -65,6 +65,31 @@ def get_rules_snapshot(
         return snapshot, response.headers.get("etag", "")
 
 
+def get_health(
+    token: str,
+    api_url: str,
+    repository_id: str,
+    *,
+    window: int,
+    exclude: list[str],
+    zones: bool,
+    queue: int,
+    explain: bool,
+) -> dict[str, Any]:
+    params: list[tuple[str, str | int | float | bool | None]] = [
+        ("window", window),
+        ("zones", str(zones).lower()),
+        ("queue", queue),
+        ("explain", str(explain).lower()),
+        *[("exclude", pattern) for pattern in exclude],
+    ]
+    with make_client(token, api_url) as client:
+        response = client.get(f"/v1/repos/{repository_id}/health", params=params)
+        response.raise_for_status()
+        result: dict[str, Any] = response.json()
+        return result
+
+
 def get_rule(token: str, api_url: str, repository_id: str, rule_id: str) -> dict[str, Any]:
     with make_client(token, api_url) as client:
         response = client.get(f"/v1/repos/{repository_id}/rules/{rule_id}")
