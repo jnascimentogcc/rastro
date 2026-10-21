@@ -6,8 +6,9 @@ never 0% (spec D4). The API and the daily snapshot job (11.5) both call `build_r
 cannot disagree.
 
 Step 11.1 covers the knowledge base (R1-R4, R6, R3b by origin only), the pipeline warning (V2), the
-zones and the review queue. Process (P), agent use (C), source of intent (V1) and R3a/R5 need data
-that later steps start recording.
+zones and the review queue. Step 11.2 adds R3a (confirmed by someone other than the PR author), the
+process figures P1-P5 and the source of intent V1, which need the PR author and the commit-to-PR link
+that the webhook jobs started recording in migration 0012. Agent use (C) and R5 come later.
 """
 
 import fnmatch
@@ -16,15 +17,24 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, distinct, exists, func, literal, or_, select
+from sqlalchemy import Text, and_, case, cast, distinct, exists, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rastro_db.models import Commit, Rule, RuleAnchor, RuleReview, SymbolCall
+from rastro_db.models import (
+    AgentSession,
+    Commit,
+    Rule,
+    RuleAnchor,
+    RuleProposal,
+    RuleReview,
+    SymbolCall,
+)
 from rastro_db.models import Symbol as SymbolRow
 
 DEFINITIONS_VERSION = 1
 SMALL_SAMPLE = 10  # below this many cases a percentage is flagged, not trusted (spec D2)
 STALE_AWAITING_MERGE_DAYS = 14
+MIN_REVIEWERS = 3  # breakdowns that depend on who reviewed need this many distinct people (spec D3)
 MAX_QUEUE = 50
 DEFAULT_EXCLUDES = (
     "tests/*",
@@ -70,6 +80,18 @@ DEFINITIONS: dict[str, dict[str, str]] = {
         "source": "rule_reviews.reviewer_source",
         "not_proof": "Reviews made with the CLI carry an unverified name",
     },
+    "R3a": {
+        "title": "Confirmations by someone other than the PR author",
+        "formula": (
+            "validated rules whose validating review was made by a different GitHub login than the "
+            "author of the pull request / validated rules whose validating review has both logins known"
+        ),
+        "source": "rule_reviews.reviewer_is_pr_author",
+        "not_proof": (
+            "Only GitHub reviews count: the CLI name is unverified, and reviews made before the PR author "
+            "was recorded are unknown"
+        ),
+    },
     "R4": {
         "title": "Validation outdated by an edit of the rule",
         "formula": "active rules that were validated and then changed (validated_revision < revision)",
@@ -81,6 +103,52 @@ DEFINITIONS: dict[str, dict[str, str]] = {
         "formula": "age of the oldest active rule without a valid confirmation, and the median age",
         "source": "rules.created_at",
         "not_proof": "Age says how long it has waited, not how important it is",
+    },
+    "P1": {
+        "title": "Pull requests with proposals",
+        "formula": "distinct pull requests that received rule proposals in the window",
+        "source": "rule_proposals",
+        "not_proof": "A pull request without proposals may simply not have touched any rule",
+    },
+    "P2": {
+        "title": "Proposals reviewed before the merge",
+        "formula": "applied proposals created in the window that somebody reviewed / applied proposals",
+        "source": "rule_proposals.reviewed_at",
+        "not_proof": "That the review was careful",
+    },
+    "P3": {
+        "title": "Proposals integrated without review",
+        "formula": "applied proposals created in the window that nobody reviewed / applied proposals",
+        "source": "rule_proposals.reviewed_at",
+        "not_proof": "An unreviewed proposal may still be right; it was integrated unconfirmed",
+    },
+    "P4": {
+        "title": "Time to the first review",
+        "formula": "median of reviewed_at - created_at over the proposals reviewed in the window",
+        "source": "rule_proposals",
+        "not_proof": f"Shown only with at least {MIN_REVIEWERS} distinct reviewers, so it never points at a person",
+    },
+    "P5": {
+        "title": "Perceived precision of the extraction",
+        "formula": "verdicts in the window: confirmed as written / corrected / rejected",
+        "source": "rule_reviews.verdict (the proposal's state is already 'applied' after the merge)",
+        "not_proof": (
+            "It tells how good the extraction is, not how good the people are. "
+            f"Shown only with at least {MIN_REVIEWERS} distinct reviewers"
+        ),
+    },
+    "V1": {
+        "title": "Integrations with no recorded intent",
+        "formula": (
+            "integrated pull requests, counted with all their commits and the merge or squash commit, "
+            "that have no captured session / integrated pull requests plus direct commits with a session"
+        ),
+        "source": "commits.merged_pr_number, agent_sessions",
+        "not_proof": (
+            "Hand-written code has no session and is legitimate: this is code without recorded intent, "
+            "not code generated by AI. Direct commits without a session cannot be told apart from older "
+            "merge commits (before the PR link existed), so they are listed apart and left out of the ratio"
+        ),
     },
     "V2": {
         "title": "Pipeline problems",
@@ -154,6 +222,8 @@ class HealthReport:
     warnings: list[str]
     pipeline: dict[str, int]
     knowledge: list[Metric]
+    process: list[Metric]
+    intent: list[Metric]
     zones: list[Zone]
     queue: list[QueueItem]
 
@@ -206,6 +276,9 @@ async def build_report(
     now = now or datetime.now(UTC)
     patterns = (*DEFAULT_EXCLUDES, *excludes)
     knowledge = await _knowledge(session, repository_id, now)
+    window_start = now - timedelta(days=window_days)
+    process = await _process(session, repository_id, window_start)
+    intent = [await _intent(session, repository_id, window_start)]
     pipeline = await _pipeline(session, repository_id, now, window_days)
     warnings = _warnings(pipeline)
     head_sha = await session.scalar(
@@ -225,6 +298,8 @@ async def build_report(
         warnings=warnings,
         pipeline=pipeline,
         knowledge=knowledge,
+        process=process,
+        intent=intent,
         zones=zones,
         queue=queue,
     )
@@ -269,6 +344,7 @@ async def _knowledge(
     none_active = "no active rules"
 
     github_verified = await _github_verified(session, repository_id)
+    by_other, author_known = await _confirmed_by_other(session, repository_id)
     not_validated = await _unvalidated_ages(session, repository_id, now)
 
     metrics = [
@@ -301,6 +377,14 @@ async def _knowledge(
             detail={"unverified": validated - github_verified},
         ),
         ratio(
+            "R3a",
+            "...by someone other than the PR author",
+            by_other,
+            author_known,
+            na_reason="no confirmation with a known PR author",
+            detail={"unknown": validated - author_known},
+        ),
+        ratio(
             "R4",
             "Confirmation outdated by an edit of the rule",
             outdated,
@@ -326,6 +410,30 @@ async def _github_verified(session: AsyncSession, repository_id: uuid.UUID) -> i
         )
     )
     return int(count or 0)
+
+
+async def _confirmed_by_other(session: AsyncSession, repository_id: uuid.UUID) -> tuple[int, int]:
+    """(validated by a login other than the PR author, validated with both logins known)."""
+    flag = (
+        select(RuleReview.reviewer_is_pr_author)
+        .where(
+            RuleReview.rule_id == Rule.id,
+            RuleReview.rule_revision == Rule.validated_revision,
+            RuleReview.verdict.in_(("confirmed", "corrected")),
+        )
+        .order_by(RuleReview.created_at.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    row = (
+        await session.execute(
+            select(
+                func.count().filter(flag.is_(False)),
+                func.count().filter(flag.is_not(None)),
+            ).where(Rule.repository_id == repository_id, Rule.status == "active", _is_validated())
+        )
+    ).one()
+    return int(row[0]), int(row[1])
 
 
 async def _unvalidated_ages(
@@ -358,6 +466,160 @@ async def _unvalidated_ages(
             "oldest_days": int(float(row[1]) // 86400),
             "median_days": int(float(row[2]) // 86400),
         },
+    )
+
+
+# --------------------------------------------------------------------------- process (P) and intent (V1)
+
+
+async def _process(
+    session: AsyncSession, repository_id: uuid.UUID, window_start: datetime
+) -> list[Metric]:
+    in_window = and_(
+        RuleProposal.repository_id == repository_id, RuleProposal.created_at >= window_start
+    )
+    prs = int(
+        await session.scalar(select(func.count(distinct(RuleProposal.pr_number))).where(in_window))
+        or 0
+    )
+    applied, reviewed = (
+        int(value)
+        for value in (
+            await session.execute(
+                select(
+                    func.count(), func.count().filter(RuleProposal.reviewed_at.is_not(None))
+                ).where(in_window, RuleProposal.state == "applied")
+            )
+        ).one()
+    )
+    none = "no proposal was integrated in the window"
+    metrics = [
+        Metric("P1", "Pull requests with proposals", numerator=prs),
+        ratio("P2", "Reviewed before the merge", reviewed, applied, na_reason=none),
+        ratio("P3", "Integrated without review", applied - reviewed, applied, na_reason=none),
+    ]
+
+    elapsed = func.extract("epoch", RuleProposal.reviewed_at - RuleProposal.created_at)
+    count, reviewers, median = (
+        await session.execute(
+            select(
+                func.count(),
+                func.count(distinct(RuleProposal.reviewed_by)),
+                func.percentile_cont(0.5).within_group(elapsed),
+            ).where(in_window, RuleProposal.reviewed_at.is_not(None))
+        )
+    ).one()
+    few = f"fewer than {MIN_REVIEWERS} distinct reviewers: a breakdown could point at a person"
+    if reviewers < MIN_REVIEWERS:
+        metrics.append(Metric("P4", "Time to the first review", available=False, na_reason=few))
+    else:
+        metrics.append(
+            Metric(
+                "P4",
+                "Time to the first review",
+                numerator=int(count),
+                detail={"median_hours": round(float(median) / 3600, 1)},
+            )
+        )
+
+    verdicts = ("confirmed", "corrected", "rejected")
+    rows = (
+        await session.execute(
+            select(RuleReview.verdict, func.count(), func.count(distinct(RuleReview.reviewer)))
+            .join(Rule, Rule.id == RuleReview.rule_id)
+            .where(
+                Rule.repository_id == repository_id,
+                RuleReview.created_at >= window_start,
+                RuleReview.verdict.in_(verdicts),
+            )
+            .group_by(RuleReview.verdict)
+        )
+    ).all()
+    by_verdict = {verdict: int(n) for verdict, n, _ in rows}
+    distinct_reviewers = int(
+        await session.scalar(
+            select(func.count(distinct(RuleReview.reviewer)))
+            .join(Rule, Rule.id == RuleReview.rule_id)
+            .where(
+                Rule.repository_id == repository_id,
+                RuleReview.created_at >= window_start,
+                RuleReview.verdict.in_(verdicts),
+            )
+        )
+        or 0
+    )
+    total = sum(by_verdict.values())
+    if distinct_reviewers < MIN_REVIEWERS and total:
+        metrics.append(Metric("P5", "Verdicts on the extraction", available=False, na_reason=few))
+    else:
+        metrics.append(
+            ratio(
+                "P5",
+                "Confirmed as written",
+                by_verdict.get("confirmed", 0),
+                total,
+                na_reason="no verdicts in the window",
+                detail={verdict: by_verdict.get(verdict, 0) for verdict in verdicts},
+            )
+        )
+    return metrics
+
+
+async def _intent(
+    session: AsyncSession, repository_id: uuid.UUID, window_start: datetime
+) -> Metric:
+    """V1 per integration unit: a pull request (all its commits and the merge or squash commit) or a
+    direct commit. A unit is dated by its newest commit, because the PR's own commits are older than
+    the merge that integrates them."""
+    unit = case(
+        (Commit.merged_pr_number.is_not(None), "pr:" + cast(Commit.merged_pr_number, Text)),
+        else_="sha:" + Commit.sha,
+    )
+    has_session = exists().where(
+        AgentSession.repository_id == Commit.repository_id, AgentSession.commit_sha == Commit.sha
+    )
+    units = (
+        select(
+            func.bool_or(Commit.merged_pr_number.is_not(None)).label("is_pr"),
+            func.bool_or(has_session).label("has_session"),
+            func.max(Commit.committed_at).label("newest"),
+        )
+        .where(Commit.repository_id == repository_id, Commit.on_default_branch.is_(True))
+        .group_by(unit)
+        .subquery()
+    )
+    row = (
+        await session.execute(
+            select(
+                func.count().filter(and_(units.c.is_pr, units.c.newest >= window_start)),
+                func.count().filter(
+                    and_(units.c.is_pr, units.c.has_session, units.c.newest >= window_start)
+                ),
+                func.count().filter(
+                    and_(~units.c.is_pr, units.c.has_session, units.c.newest >= window_start)
+                ),
+                func.count().filter(
+                    and_(~units.c.is_pr, ~units.c.has_session, units.c.newest >= window_start)
+                ),
+                func.count().filter(units.c.newest.is_(None)),
+            )
+        )
+    ).one()
+    pr_units, pr_with_session, direct_with_session, unattributed, undated = (int(v) for v in row)
+    detail = {
+        "pull_requests": pr_units,
+        "pull_requests_with_session": pr_with_session,
+        "direct_commits_with_session": direct_with_session,
+        "unattributed_commits": unattributed,
+        "undated_units": undated,
+    }
+    return ratio(
+        "V1",
+        "Integrations with no recorded intent",
+        pr_units - pr_with_session,
+        pr_units + direct_with_session,
+        na_reason="no integration in the window",
+        detail=detail,
     )
 
 

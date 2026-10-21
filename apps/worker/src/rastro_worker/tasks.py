@@ -118,17 +118,24 @@ async def resync_anchors(repository_id: str) -> None:
 
 @app.task(name="analyze_pr", retry=retry_transient)
 @log_github_errors
-async def analyze_pr(repository_id: str, number: int, head_sha: str) -> None:
+async def analyze_pr(
+    repository_id: str, number: int, head_sha: str, author: str | None = None
+) -> None:
     """Impact analysis of a pull request; the single PR comment is edited in place."""
     if not await repository_is_active(repository_id):
         return
-    await impact.analyze_pull_request(get_deps(), uuid.UUID(repository_id), number, head_sha)
+    await impact.analyze_pull_request(
+        get_deps(), uuid.UUID(repository_id), number, head_sha, author=author
+    )
 
 
 @app.task(name="pull_request_merged", retry=retry_transient)
 @log_github_errors
 async def pull_request_merged(
-    repository_id: str, number: int, merge_commit_sha: str | None = None
+    repository_id: str,
+    number: int,
+    merge_commit_sha: str | None = None,
+    author: str | None = None,
 ) -> None:
     """A pull request was merged (merge, squash or rebase). Release the sessions of its own
     commits for rule extraction, oldest commit first; jobs of a repository run in the order they
@@ -137,7 +144,11 @@ async def pull_request_merged(
     if not await repository_is_active(repository_id):
         return
     merged = await merged_pr.release_pull_request_commits(
-        get_deps(), uuid.UUID(repository_id), number
+        get_deps(),
+        uuid.UUID(repository_id),
+        number,
+        merge_commit_sha=merge_commit_sha,
+        author=author,
     )
     if merge_commit_sha:
         await analyze_commit.configure(lock=repository_id).defer_async(

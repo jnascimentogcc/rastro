@@ -109,7 +109,11 @@ def _key(path: str, name: str) -> str:
 
 
 async def analyze_pull_request(
-    deps: WorkerDeps, repository_id: uuid.UUID, number: int, head_sha: str
+    deps: WorkerDeps,
+    repository_id: uuid.UUID,
+    number: int,
+    head_sha: str,
+    author: str | None = None,
 ) -> ImpactResult:
     llm = deps.llm
     if llm is None:
@@ -122,7 +126,7 @@ async def analyze_pull_request(
     if await deps.over_budget(repository_id):
         # No impact analysis (it needs the model). The preview may still have cached proposals to
         # show, and says it cannot run for new commits; with neither there is no comment at all.
-        preview = await _safe_preview(deps, llm, repository, number)
+        preview = await _safe_preview(deps, llm, repository, number, author)
         result = ImpactResult(
             "skipped_budget", proposals=sum(1 for i in preview.items if i.state != "rejected")
         )
@@ -165,18 +169,22 @@ async def analyze_pull_request(
         reverse=True,
     )
     result.reported = len(reported)
-    preview = await _safe_preview(deps, llm, repository, number)
+    preview = await _safe_preview(deps, llm, repository, number, author)
     result.proposals = sum(1 for i in preview.items if i.state != "rejected")
     await _publish(deps, repository, number, head_sha, assessments, reported, result, preview)
     return result
 
 
 async def _safe_preview(
-    deps: WorkerDeps, llm: LLMProvider, repository: Repository, number: int
+    deps: WorkerDeps,
+    llm: LLMProvider,
+    repository: Repository,
+    number: int,
+    author: str | None = None,
 ) -> PreviewOutcome:
     """The preview is an extra: its failure must not cost the PR its impact comment."""
     try:
-        return await refresh_preview(deps, llm, repository, number)
+        return await refresh_preview(deps, llm, repository, number, author=author)
     except Exception as error:
         if is_transient(error):
             raise  # the job retries later with backoff

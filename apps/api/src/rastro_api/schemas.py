@@ -230,6 +230,8 @@ class HealthOut(BaseModel):
     warnings: list[str]
     pipeline: dict[str, int]
     knowledge: list[MetricOut]
+    process: list[MetricOut]
+    intent: list[MetricOut]
     zones: list[ZoneOut]
     queue: list[QueueItemOut]
     definitions: dict[str, DefinitionOut] | None = None

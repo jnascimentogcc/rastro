@@ -4,6 +4,7 @@ the default branch, so a merged pull request releases them."""
 from typing import Any
 
 from procrastinate import testing
+from sqlalchemy import update
 from test_rule_extraction import (
     AFTER,
     AFTER_SATURDAY,
@@ -17,9 +18,11 @@ from test_rule_extraction import (
 )
 from worker_support import WorkerContext, user_excerpt
 
+from rastro_db.models import Commit
 from rastro_llm import RuleExtraction
 from rastro_worker import tasks
 from rastro_worker.app import app
+from rastro_worker.merged_pr import release_pull_request_commits
 from rastro_worker.rule_extraction import extract_rules
 
 NUMBER = 7
@@ -162,3 +165,32 @@ async def test_without_a_merge_commit_sha_only_the_extractions_are_queued(
 
     assert queued(jobs, "analyze_commit") == []
     assert queued(jobs, "rule_extraction") == [SHA2, SHA3]
+
+
+async def test_the_pull_request_is_recorded_on_its_commits_and_on_the_merge_commit(
+    worker: WorkerContext,
+) -> None:
+    await stage_pull_request(worker)
+    async with worker.deps.session_factory() as session, session.begin():
+        await session.execute(
+            update(Commit)
+            .where(Commit.repository_id == worker.repository_id, Commit.sha == SHA1)
+            .values(merged_pr_number=99)  # already recorded with an earlier pull request
+        )
+
+    await release_pull_request_commits(
+        worker.deps, worker.repository_id, NUMBER, merge_commit_sha=SQUASH, author="dev-ana"
+    )
+
+    numbers = {
+        sha: (await worker.commit(sha)).merged_pr_number  # type: ignore[union-attr]
+        for sha in (SHA1, SHA2, SHA3, SQUASH)
+    }
+    assert numbers == {
+        SHA1: 99,
+        SHA2: NUMBER,
+        SHA3: NUMBER,
+        SQUASH: NUMBER,
+    }  # a commit keeps its first PR
+    squash = await worker.commit(SQUASH)
+    assert squash is not None and squash.on_default_branch is True  # the squash commit exists now

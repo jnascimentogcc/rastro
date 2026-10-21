@@ -575,6 +575,7 @@ class _Review:
     reviewed_at: datetime | None
     pr_number: int | None
     rationale_by: str | None  # set when a person wrote the reason
+    pr_author: str | None = None  # GitHub login of the PR author, when it was recorded
 
 
 def _validate(
@@ -919,6 +920,7 @@ async def _accepted_from_proposals(
                         reviewed_at=proposal.reviewed_at,
                         pr_number=proposal.pr_number,
                         rationale_by=proposal.rationale_by if human else None,
+                        pr_author=proposal.pr_author,
                     ),
                 )
             )
@@ -941,6 +943,11 @@ async def _record_review(
     is_author = (
         True if author and review.reviewer and author.lower() == review.reviewer.lower() else None
     )
+
+    def is_pr_author(login: str | None) -> bool | None:
+        # Two GitHub logins compared: True or False, and NULL only when either is unknown
+        return login.lower() == review.pr_author.lower() if login and review.pr_author else None
+
     now = datetime.now(UTC)
     validated = review.state in ("confirmed", "corrected") and review.reviewer is not None
     if validated:
@@ -962,6 +969,7 @@ async def _record_review(
                 reviewer=review.reviewer,
                 reviewer_source="github",
                 reviewer_is_session_author=is_author,
+                reviewer_is_pr_author=is_pr_author(review.reviewer),
                 statement_after=item.rule.statement if review.state == "corrected" else None,
                 rationale_after=item.rationale if review.rationale_by else None,
                 pr_number=review.pr_number,
@@ -978,6 +986,7 @@ async def _record_review(
                 reviewer_is_session_author=(
                     True if author and author.lower() == review.rationale_by.lower() else None
                 ),
+                reviewer_is_pr_author=is_pr_author(review.rationale_by),
                 rationale_after=item.rationale,
                 pr_number=review.pr_number,
             )

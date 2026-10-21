@@ -14,6 +14,7 @@ from worker_support import WorkerContext, user_excerpt
 from rastro_db.models import Commit, Rule, RuleProposal, RuleReview
 from rastro_llm import LLMQuotaError, RuleExtraction
 from rastro_worker.indexing import index_repository
+from rastro_worker.preview import set_pr_author
 from rastro_worker.rule_extraction import extract_rules
 
 SHA4 = "6" * 40
@@ -315,3 +316,60 @@ async def test_an_unknown_author_stays_unknown(worker: WorkerContext) -> None:
 
     [entry] = await reviews(worker)
     assert entry.reviewer_is_session_author is None  # never a guess
+
+
+async def record_pr_author(worker: WorkerContext, login: str | None) -> None:
+    async with worker.deps.session_factory() as session, session.begin():
+        await session.execute(
+            update(RuleProposal)
+            .where(RuleProposal.repository_id == worker.repository_id)
+            .values(pr_author=login)
+        )
+
+
+async def test_a_reviewer_other_than_the_pr_author_is_recorded_as_such(
+    worker: WorkerContext,
+) -> None:
+    _, _, key = await previewed(worker)
+    await record_pr_author(worker, "dev-bo")
+    await review(worker, 1001, body=f"/rastro ok {key[:6]}")
+
+    await merge(worker)
+
+    [entry] = await reviews(worker)
+    assert entry.reviewer_is_pr_author is False
+
+
+async def test_the_pr_author_confirming_their_own_proposal_is_recorded_as_such(
+    worker: WorkerContext,
+) -> None:
+    _, _, key = await previewed(worker)
+    await record_pr_author(worker, ANA.upper())  # logins are compared without regard to case
+    await review(worker, 1001, body=f"/rastro ok {key[:6]}")
+
+    await merge(worker)
+
+    [entry] = await reviews(worker)
+    assert entry.reviewer_is_pr_author is True
+
+
+async def test_without_a_recorded_pr_author_the_flag_stays_unknown(worker: WorkerContext) -> None:
+    _, _, key = await previewed(worker)
+    await record_pr_author(worker, None)
+    await review(worker, 1001, body=f"/rastro ok {key[:6]}")
+
+    await merge(worker)
+
+    [entry] = await reviews(worker)
+    assert entry.reviewer_is_pr_author is None  # never a guess
+
+
+async def test_the_pr_author_only_fills_proposals_that_have_none(worker: WorkerContext) -> None:
+    await previewed(worker)
+
+    await set_pr_author(worker.deps, worker.repository_id, NUMBER, "dev-ana")
+    await set_pr_author(worker.deps, worker.repository_id, NUMBER, "someone-else")
+    await set_pr_author(worker.deps, worker.repository_id, NUMBER, None)
+
+    proposals = await _proposals(worker)
+    assert proposals and {p.pr_author for p in proposals} == {"dev-ana"}
