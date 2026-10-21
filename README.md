@@ -2,6 +2,8 @@
 
 Rastro preserves the *why* behind AI-generated code: it captures developer intent from coding-agent sessions, extracts business rules, anchors them to code, and warns on pull requests when a change may break one. See [docs/spec-rastro-mvp.md](docs/spec-rastro-mvp.md) for the full MVP spec.
 
+**To install and use Rastro, read [INSTALLATION.md](INSTALLATION.md)** (the CLI for developers, the server and the GitHub App for the operator). The rest of this file is for people working on the code and for reference.
+
 ## Status
 
 Phases 1 to 11 of the spec are built: capture, static analysis, GitHub App, rule extraction, anchor resync, pull request
@@ -72,22 +74,10 @@ Review the generated file: Alembic does not detect everything (for example `CREA
 
 ## Running with Docker
 
-The compose file runs the whole stack: `postgres` (pgvector), a one-shot `migrate` service
-(`alembic upgrade head`, then `python -m rastro_worker.schema`, which applies the Procrastinate schema
-only when it is missing, so re-running is safe), `api` and `worker`. Both images are multi-stage
-uv builds that run as a non-root user.
-
-```bash
-cp .env.example .env          # optional; GitHub App and LLM settings are read from it
-mkdir -p secrets              # put github-app.private-key.pem here (mounted read-only at /secrets)
-docker compose up -d --build --wait
-curl localhost:8000/health    # {"status":"ok"}
-```
-
-`DATABASE_URL` and the private-key path are set by compose itself; everything else comes from `.env`.
-Host ports can be changed with `POSTGRES_PORT` and `API_PORT` (defaults 5432 and 8000). To issue a
-repository token: `docker compose exec api python -m rastro_api.admin issue-token --github-id 1 --full-name owner/repo`.
-After pulling new code run `docker compose up -d --build` again; `migrate` runs before `api` and `worker` restart.
+The compose file runs the whole stack (`postgres` with pgvector, a one-shot `migrate` service that applies Alembic and
+the Procrastinate schema, `api` and `worker`; non-root multi-stage uv images). The step-by-step is in
+[INSTALLATION.md](INSTALLATION.md#23-start-the-stack). `DATABASE_URL` and the private-key path are set by compose;
+everything else comes from `.env`. Host ports: `POSTGRES_PORT` and `API_PORT` (5432 and 8000).
 
 ## Releasing the packages
 
@@ -125,35 +115,15 @@ add `--extra-index-url https://pypi.org/simple/` (`pipx install --index-url http
 tool's bin directory must be on the `PATH` git sees (`pipx ensurepath` / `uv tool update-shell`);
 `rastro init` warns when it is not.
 
-## GitHub App setup (phase 4)
+## GitHub App (phase 4)
 
-1. **Create the App** at <https://github.com/settings/apps/new>:
-   - Homepage URL: any (e.g. the repository URL).
-   - Webhook URL: a public URL that reaches your API (for local work use <https://smee.io> and
-     `npx smee-client --url https://smee.io/XXXX --target http://localhost:8000/webhooks/github`).
-   - Webhook secret: a long random string (`python -c "import secrets; print(secrets.token_urlsafe(32))"`).
-   - Repository permissions: Contents: read-only, Pull requests: read and write, Metadata: read-only.
-   - Subscribe to events: Push, Pull request, **Issue comment** (phase 9.3: reviewing proposed rules
-     from GitHub; the `installation` events are always sent). If GitHub does not offer *Issue comment*
-     until the App has *Issues: read*, add that permission too, then accept the new permissions on the
-     installation page.
-   - Where can this App be installed: only on your account.
-2. **Generate a private key** (App settings, "Private keys") and save the `.pem` under `secrets/`
-   (git-ignored). Note the **App ID**.
-3. **Fill `.env`** (copy `.env.example`): `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`,
-   `GITHUB_WEBHOOK_SECRET`.
-4. **Run** the services with the same environment:
+Creating and installing the App is described in [INSTALLATION.md](INSTALLATION.md#22-create-the-github-app). For
+local development run the services with the same environment:
 
-   ```bash
-   uv run --env-file .env python -m rastro_api --reload   # selects a Windows-safe event loop
-   PROCRASTINATE_APP=rastro_worker.app.app uv run --env-file .env procrastinate worker
-   ```
-
-5. **Install the App** on a test repository. GitHub sends `installation`; the API registers the
-   repository and the worker runs `index_repository` (symbols and call graph of the default
-   branch). Check "Advanced > Recent deliveries" in the App settings for `202` responses.
-6. **Push a commit**: the API stores it and queues `analyze_commit`, which joins it with the
-   session captured by `rastro` (same SHA) and refreshes the symbols of the files it touched.
+```bash
+uv run --env-file .env python -m rastro_api --reload   # selects a Windows-safe event loop
+PROCRASTINATE_APP=rastro_worker.app.app uv run --env-file .env procrastinate worker
+```
 
 Webhooks: `ping`, `installation`, `installation_repositories`, `push` and `pull_request` are
 handled. Each delivery id (`X-GitHub-Delivery`) is stored in `webhook_deliveries`; a replay is
