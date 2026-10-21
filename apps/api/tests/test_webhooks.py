@@ -342,7 +342,12 @@ def pull_request_payload(action: str = "opened", sha: str = SHA_A) -> dict[str, 
             "full_name": "acme/webhook-clinic",
             "default_branch": "main",
         },
-        "pull_request": {"number": 7, "head": {"sha": sha}, "draft": False},
+        "pull_request": {
+            "number": 7,
+            "head": {"sha": sha},
+            "draft": False,
+            "user": {"login": "dev-ana"},
+        },
     }
 
 
@@ -355,6 +360,7 @@ async def test_pull_request_activity_queues_an_impact_analysis(
     assert response.status_code == 202 and response.json()["handled"] is True
     [job] = api.jobs("analyze_pr")
     assert job["args"]["number"] == 7 and job["args"]["head_sha"] == SHA_A  # type: ignore[index]
+    assert job["args"]["author"] == "dev-ana"  # type: ignore[index]
     assert job["lock"] == job["args"]["repository_id"]  # type: ignore[index]
     async with create_session_factory(api.engine)() as session:
         repo = await session.scalar(select(Repository).where(Repository.github_id == GITHUB_ID))
@@ -387,6 +393,7 @@ async def test_a_merged_pull_request_queues_the_release_of_its_commits(api: ApiC
     assert response.status_code == 202 and response.json()["handled"] is True
     [job] = api.jobs("pull_request_merged")
     assert job["args"]["number"] == 7 and job["args"]["merge_commit_sha"] == SHA_B  # type: ignore[index]
+    assert job["args"]["author"] == "dev-ana"  # type: ignore[index]
     assert job["lock"] == job["args"]["repository_id"]  # type: ignore[index]
     assert api.jobs("analyze_pr") == []
 
@@ -440,3 +447,14 @@ async def test_merging_a_pull_request_flips_all_its_commits_and_the_flag_never_g
 
     await deliver(api, "push", push_payload(ref="refs/heads/feature/x"))  # a late redelivery
     assert {c.on_default_branch for c in await stored_commits(api)} == {True}
+
+
+async def test_a_pull_request_without_a_user_still_queues_with_no_author(api: ApiContext) -> None:
+    payload = pull_request_payload("opened")
+    del payload["pull_request"]["user"]  # e.g. a deleted account: the author is simply unknown
+
+    response = await deliver(api, "pull_request", payload, delivery_id="no-user" + RUN)
+
+    assert response.status_code == 202
+    [job] = api.jobs("analyze_pr")
+    assert job["args"]["author"] is None  # type: ignore[index]

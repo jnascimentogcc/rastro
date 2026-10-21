@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from rastro_db.models import AgentSession, Commit, Repository, Rule, RulePreview, RuleProposal
@@ -65,8 +65,31 @@ def proposal_key(statement: str, symbols: list[str]) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:32]
 
 
+async def set_pr_author(
+    deps: WorkerDeps, repository_id: uuid.UUID, number: int, author: str | None
+) -> None:
+    """Remember who opened the PR on its proposals (the health report compares it with the reviewer).
+    Only fills what is empty: a proposal keeps the author it was first stored with."""
+    if not author:
+        return
+    async with deps.session_factory() as session, session.begin():
+        await session.execute(
+            update(RuleProposal)
+            .where(
+                RuleProposal.repository_id == repository_id,
+                RuleProposal.pr_number == number,
+                RuleProposal.pr_author.is_(None),
+            )
+            .values(pr_author=author)
+        )
+
+
 async def refresh_preview(
-    deps: WorkerDeps, llm: LLMProvider, repository: Repository, number: int
+    deps: WorkerDeps,
+    llm: LLMProvider,
+    repository: Repository,
+    number: int,
+    author: str | None = None,
 ) -> PreviewOutcome:
     """Preview the PR's new commits, tidy the stored proposals and return what is still pending."""
     shas = list(
@@ -141,6 +164,7 @@ async def refresh_preview(
         await _store(deps, repository.id, number, sha, proposals)
         outcome.previewed += 1
 
+    await set_pr_author(deps, repository.id, number, author)
     await _tidy(deps, repository.id, number, shas)
     outcome.items = await load_review_items(deps, repository.id, number, shas)
     return outcome

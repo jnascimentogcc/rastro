@@ -81,6 +81,9 @@ class Commit(Base):
     # Set by the push webhook: True once the commit is part of the default branch. NULL = unknown
     # (rows from before the flag, or created by tools); only an explicit False defers extraction.
     on_default_branch: Mapped[bool | None] = mapped_column(Boolean)
+    # The pull request this commit was integrated with: the PR's own commits and the merge or
+    # squash commit it produced. NULL = a direct commit, or a commit from before this was recorded.
+    merged_pr_number: Mapped[int | None] = mapped_column(Integer)
 
 
 class AgentSession(Base):
@@ -189,6 +192,9 @@ class RuleReview(Base):
     reviewer: Mapped[str] = mapped_column(Text, nullable=False)  # GitHub login or git email
     reviewer_source: Mapped[str] = mapped_column(Text, nullable=False)  # github | cli (unverified)
     reviewer_is_session_author: Mapped[bool | None] = mapped_column(Boolean)
+    # Compares two GitHub logins: the reviewer and the author of the pull request. True or False for
+    # GitHub reviews once the PR author is known; NULL for CLI reviews (unverified) and older rows.
+    reviewer_is_pr_author: Mapped[bool | None] = mapped_column(Boolean)
     statement_after: Mapped[str | None] = mapped_column(Text)
     rationale_after: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
@@ -227,6 +233,7 @@ class RuleProposal(Base):
     rationale_source: Mapped[str | None] = mapped_column(Text)  # conversation | human
     rationale_by: Mapped[str | None] = mapped_column(Text)  # login, when a human wrote it
     reviewed_by: Mapped[str | None] = mapped_column(Text)  # GitHub login of the last reviewer
+    pr_author: Mapped[str | None] = mapped_column(Text)  # GitHub login of the pull request author
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _now()
 

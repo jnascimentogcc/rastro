@@ -274,6 +274,7 @@ async def _on_pull_request(
     if not await _is_active(session, repository_id):
         return False
     number = int(payload["number"])
+    author = (pull_request.get("user") or {}).get("login") or None  # GitHub login of the PR author
     if merged:
         # Squash and rebase merges create new commits; the sessions belong to the PR's own ones.
         await enqueue(
@@ -283,6 +284,7 @@ async def _on_pull_request(
             queueing_lock=f"pr-merged:{repository_id}:{number}",
             number=number,
             merge_commit_sha=pull_request.get("merge_commit_sha"),
+            author=author,
         )
         return True
     # A job already waiting for this PR will read its latest state, so do not stack another.
@@ -293,6 +295,7 @@ async def _on_pull_request(
         queueing_lock=f"pr:{repository_id}:{number}",
         number=number,
         head_sha=pull_request["head"]["sha"],
+        author=author,
     )
     return True
 

@@ -86,6 +86,10 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
     r3b = metrics["R3b"]
     out.append(f"    ...verified by GitHub         {_percent(r3b)}")
     out += _explain(definitions.get("R3b")) if explain else []
+    r3a = metrics.get("R3a")
+    if r3a is not None:
+        out.append(f"    ...by someone other than the PR author  {_percent(r3a)}")
+        out += _explain(definitions.get("R3a")) if explain else []
 
     out.append(f"  Confirmation outdated by edits  {_percent(metrics['R4'])}")
     out += _explain(definitions.get("R4")) if explain else []
@@ -99,6 +103,46 @@ def render_health(report: dict[str, Any], *, zones: bool, explain: bool) -> str:
     else:
         out.append(f"  Oldest unconfirmed rule         n/a ({r6['na_reason']})")
     out += _explain(definitions.get("R6")) if explain else []
+
+    process = {metric["id"]: metric for metric in report.get("process", [])}
+    if process:
+        out += ["", f"Process (last {window} days)"]
+        out.append(f"  Pull requests with proposals    {process['P1']['numerator']}")
+        out += _explain(definitions.get("P1")) if explain else []
+        out.append(f"  Reviewed before the merge       {_percent(process['P2'])}")
+        out += _explain(definitions.get("P2")) if explain else []
+        out.append(f"  Integrated without review       {_percent(process['P3'])}")
+        out += _explain(definitions.get("P3")) if explain else []
+        p4 = process["P4"]
+        if p4["available"]:
+            out.append(
+                f"  Time to first review            {p4['detail']['median_hours']} h (median of "
+                f"{p4['numerator']} proposal(s))"
+            )
+        else:
+            out.append(f"  Time to first review            n/a ({p4['na_reason']})")
+        out += _explain(definitions.get("P4")) if explain else []
+        p5 = process["P5"]
+        if p5["available"]:
+            d = p5["detail"]
+            out.append(
+                f"  Verdicts                        {_percent(p5)} confirmed as written, "
+                f"{d['corrected']} corrected, {d['rejected']} rejected"
+            )
+        else:
+            out.append(f"  Verdicts                        n/a ({p5['na_reason']})")
+        out += _explain(definitions.get("P5")) if explain else []
+
+    for v1 in report.get("intent", []):
+        out += ["", f"Code without recorded intent (last {window} days)"]
+        out.append(f"  Integrations with no session    {_percent(v1)}")
+        loose = v1["detail"].get("unattributed_commits", 0)
+        if loose:
+            out.append(
+                f"    {loose} commit(s) with no session and no pull request are left out: they cannot be "
+                "told apart from older merge commits"
+            )
+        out += _explain(definitions.get("V1")) if explain else []
 
     if zones:
         out += ["", "Zones (directories; tests, dependencies and generated code left out)"]

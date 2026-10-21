@@ -67,6 +67,7 @@ REPORT: dict[str, Any] = {
         ),
         metric("R3", "Confirmed by a person", 3, 27),
         metric("R3b", "...verified by GitHub", 1, 3, detail={"unverified": 2}),
+        metric("R3a", "...by someone other than the PR author", 1, 2, detail={"unknown": 1}),
         metric("R4", "Confirmation outdated", 1, 4),
         {
             "id": "R6",
@@ -75,6 +76,40 @@ REPORT: dict[str, Any] = {
             "available": True,
             "detail": {"oldest_days": 40, "median_days": 25},
         },
+    ],
+    "process": [
+        {"id": "P1", "label": "PRs", "numerator": 4, "available": True, "detail": {}},
+        metric("P2", "Reviewed before the merge", 3, 4),
+        metric("P3", "Integrated without review", 1, 4),
+        {
+            "id": "P4",
+            "label": "Time",
+            "available": False,
+            "na_reason": "fewer than 3 distinct reviewers: a breakdown could point at a person",
+            "detail": {},
+        },
+        metric(
+            "P5",
+            "Confirmed as written",
+            5,
+            8,
+            detail={"confirmed": 5, "corrected": 2, "rejected": 1},
+        ),
+    ],
+    "intent": [
+        metric(
+            "V1",
+            "Integrations with no recorded intent",
+            6,
+            14,
+            detail={
+                "pull_requests": 12,
+                "pull_requests_with_session": 6,
+                "direct_commits_with_session": 2,
+                "unattributed_commits": 40,
+                "undated_units": 0,
+            },
+        ),
     ],
     "zones": [
         {
@@ -243,6 +278,8 @@ def test_a_figure_that_cannot_be_known_says_why_instead_of_showing_zero(
             },
         ],
         "queue": [],
+        "process": [],
+        "intent": [],
     }
 
     out = runner.invoke(app, ["health"]).output
@@ -296,3 +333,67 @@ def test_server_problems_get_a_clear_message(configured: Path, server: Server) -
     result = runner.invoke(app, ["health"])
 
     assert result.exit_code == 1 and "rejected the token" in result.output
+
+
+def test_the_process_section_shows_counts_and_withholds_what_could_name_a_reviewer(
+    configured: Path, server: Server
+) -> None:
+    out = runner.invoke(app, ["health"]).output
+
+    assert "Process (last 30 days)" in out
+    assert "Pull requests with proposals    4" in out
+    assert "Reviewed before the merge       3 of 4 (75%) - small sample" in out
+    assert "Integrated without review       1 of 4 (25%) - small sample" in out
+    assert "Time to first review            n/a (fewer than 3 distinct reviewers" in out
+    assert "5 of 8 (62%) - small sample confirmed as written, 2 corrected, 1 rejected" in out
+
+
+def test_the_provenance_section_says_what_it_leaves_out_and_why(
+    configured: Path, server: Server
+) -> None:
+    out = runner.invoke(app, ["health"]).output
+
+    assert "Code without recorded intent (last 30 days)" in out
+    assert "Integrations with no session    6 of 14 (43%)" in out
+    assert "40 commit(s) with no session and no pull request are left out" in out
+    assert "cannot be told apart from older merge commits" in out
+
+
+def test_the_confirmations_by_someone_else_are_listed_under_the_confirmed_ones(
+    configured: Path, server: Server
+) -> None:
+    out = runner.invoke(app, ["health"]).output
+
+    assert "...by someone other than the PR author  1 of 2 (50%) - small sample" in out
+
+
+def test_a_report_from_an_older_server_without_the_new_sections_still_prints(
+    configured: Path, server: Server
+) -> None:
+    older = {key: value for key, value in REPORT.items() if key not in ("process", "intent")}
+    older["knowledge"] = [m for m in REPORT["knowledge"] if m["id"] != "R3a"]
+    server.report = older
+
+    result = runner.invoke(app, ["health"])
+
+    assert result.exit_code == 0, result.output
+    assert "Process (" not in result.output and "Code without recorded intent" not in result.output
+
+
+def test_explain_covers_the_new_figures(
+    configured: Path, server: Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    keys = ("R3a", "P1", "P2", "P3", "P4", "P5", "V1")
+    for key in keys:
+        definition = {
+            "title": key,
+            "formula": f"formula of {key}",
+            "source": f"source of {key}",
+            "not_proof": f"limit of {key}",
+        }
+        monkeypatch.setitem(DEFINITIONS, key, definition)
+
+    out = runner.invoke(app, ["health", "--explain"]).output
+
+    for key in keys:
+        assert f"how: formula of {key}" in out
