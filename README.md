@@ -8,7 +8,7 @@ Rastro preserves the *why* behind AI-generated code: it captures developer inten
 
 Phases 1 to 11 of the spec are built: capture, static analysis, GitHub App, rule extraction, anchor resync, pull request
 impact analysis, rules query, human validation, rules for the agent and the health report. MVP scope: TypeScript and
-JavaScript, Claude Code, GitHub, no web UI. Production deployment is decided later; the packages are ready to publish (see Releasing the packages).
+JavaScript, Claude Code, GitHub, no web UI. Production deployment is decided later; the three packages are published on PyPI (see Releasing the packages).
 
 ## Development
 

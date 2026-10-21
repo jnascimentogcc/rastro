@@ -22,19 +22,12 @@ If someone on your team already runs the server, you only need section 1 and two
 
 ### 1.1 Install
 
-The packages are currently published on **TestPyPI** only, so the dependencies are taken from PyPI:
-
 ```bash
-uv tool install --default-index https://pypi.org/simple --index https://test.pypi.org/simple/ --index-strategy unsafe-best-match rastro-cli
+pipx install rastro-cli          # or: uv tool install rastro-cli
 ```
 
-With pipx:
-
-```bash
-pipx install --index-url https://test.pypi.org/simple/ --pip-args="--extra-index-url https://pypi.org/simple/" rastro-cli
-```
-
-Once the packages are on PyPI this becomes `pipx install rastro-cli` (or `uv tool install rastro-cli`).
+To try the optional MCP server (section 1.3) install it next to the CLI: `pipx install rastro-mcp`, or
+`uv tool install rastro-mcp`. To update later: `pipx upgrade rastro-cli` or `uv tool upgrade rastro-cli`.
 
 Check it works, and that the tool's directory is on your `PATH` (the git hook calls `rastro` by name):
 
@@ -71,7 +64,7 @@ rastro agent install --no-mcp   # hooks only
 rastro agent install --shared   # for the whole team: writes .claude/settings.json (needs `rastro-hook` on everyone's PATH)
 ```
 
-`rastro-mcp` (a separate package, `rastro-mcp`) must be installed in the same environment for the MCP part;
+`rastro-mcp` (a separate package) must be installed for the MCP part;
 `rastro agent install` skips it with a message when it is missing and still installs the hooks. To allow its
 tools without a prompt, add `mcp__rastro` to `permissions.allow` (it only reads). Remove everything with
 `rastro agent uninstall`.
