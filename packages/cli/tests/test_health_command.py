@@ -523,3 +523,18 @@ def test_history_lists_the_snapshots(configured: Path, server: Server) -> None:
 
 def test_history_without_snapshots_says_so(configured: Path, server: Server) -> None:
     assert "No snapshots yet" in runner.invoke(app, ["health", "--history"]).output
+
+
+def test_format_markdown_prints_a_markdown_report(configured: Path, server: Server) -> None:
+    out = runner.invoke(app, ["health", "--format", "markdown"]).output
+
+    assert out.startswith("# Rastro health")
+    assert "| Confirmed by a person |" in out
+
+
+def test_an_unknown_format_is_refused_before_asking_the_server(
+    configured: Path, server: Server
+) -> None:
+    result = runner.invoke(app, ["health", "--format", "html"])
+
+    assert result.exit_code != 0 and server.requests == []

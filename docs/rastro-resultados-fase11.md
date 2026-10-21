@@ -1,6 +1,6 @@
 # Resultados da Fase 11: `rastro health`
 
-> Relatório vivo da [spec da Fase 11](spec-fase-11-rastro-health.md). Esta versão cobre os **passos 11.1 (núcleo), 11.2 (processo e proveniência), 11.3 (uso pelos agentes) e 11.4 (validação ultrapassada pelo código) e 11.5 (instantâneos e tendência)**, feitos a 21/10/2026. As secções dos passos 11.2 a 11.6 acrescentam-se quando existirem.
+> Relatório vivo da [spec da Fase 11](spec-fase-11-rastro-health.md). Esta versão cobre os **passos 11.1 (núcleo), 11.2 (processo e proveniência), 11.3 (uso pelos agentes) e 11.4 (validação ultrapassada pelo código) 11.5 (instantâneos e tendência) e a parte de código do 11.6 (formato Markdown)**, feitos a 21/10/2026. As secções dos passos 11.2 a 11.6 acrescentam-se quando existirem.
 
 ## 1. Passo 11.1: núcleo
 
@@ -192,3 +192,16 @@ Uma linha por repositório e dia (`UNIQUE (repository_id, taken_on)`): `window_d
 - **Só o trabalhador escreve** instantâneos; o relatório e a rota de histórico não escrevem nada (há um teste).
 - **A comparação é com o mais antigo da janela**, não com o de ontem: lê-se "o que mudou nos últimos 30 dias", que é a pergunta do relatório.
 - Ainda não há dias suficientes de instantâneos no `bella-nina` para uma tendência com sentido; a verificação real fica para o passo 11.6.
+
+## 6. Passo 11.6 (parte de código): formato Markdown e relatórios de referência
+
+- `rastro health --format markdown` (com `--zones` e `--queue`) imprime o relatório em tabelas, para colar num PR ou numa wiki. Um formato desconhecido é recusado antes de perguntar ao servidor. O texto das regras vem do servidor, por isso o `|` e as quebras de linha são neutralizados dentro das células.
+- Dois relatórios de referência (`packages/cli/tests/golden/health.txt` e `health.md`) apanham alterações acidentais de formato; regeneram-se de propósito com `RASTRO_UPDATE_GOLDEN=1`.
+- No `bella-nina` real o relatório Markdown sai completo (27 regras ativas, 3 confirmadas, fila com 8 regras). Nota: no Windows é preciso `PYTHONIOENCODING=utf-8` para redirecionar a saída para um ficheiro sem estragar os acentos (já era assim com o formato de texto).
+
+### Ainda por fazer (avaliação real, precisa de pessoas ou de dados novos)
+
+- Teste de ação: validar 5 regras da fila e ver o número subir em 5 (R3a só distingue o autor quando há revisões do GitHub com autor do PR conhecido).
+- Teste de leitura: dar o relatório Markdown a alguém que não conhece o projeto e perguntar o que faria a seguir.
+- Pergunta da Fase 10 (perguntar só nas regras validadas): precisa de mais regras validadas do que as 3 que existem.
+- Ajuste dos limites (amostra pequena, janela, tamanho da fila) com base nessas leituras.

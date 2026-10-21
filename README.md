@@ -282,6 +282,7 @@ rastro health                  # how much of the knowledge is recorded, explaine
 rastro health --zones          # per directory: symbols, symbols with a rule, rules, confirmed, no reason
 rastro health --queue 10       # what to confirm first (0 hides it)
 rastro health --history        # the daily snapshots, most recent first
+rastro health --format markdown --zones   # tables to paste into a PR or wiki
 rastro health --explain        # how each figure is computed, where it comes from, what it does not prove
 rastro health --window 60d --exclude "src/legacy/*" --json
 ```

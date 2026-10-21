@@ -12,7 +12,16 @@ from typing import Annotated
 import httpx
 import typer
 
-from rastro_cli import agent_install, capture, client, git, render, render_health, rules_cache
+from rastro_cli import (
+    agent_install,
+    capture,
+    client,
+    git,
+    render,
+    render_health,
+    render_health_markdown,
+    rules_cache,
+)
 from rastro_cli.config import (
     DEFAULT_API_URL,
     Config,
@@ -466,12 +475,18 @@ def health_command(
     history: Annotated[
         bool, typer.Option("--history", help="List the daily snapshots instead of the report.")
     ] = False,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="text (default) or markdown, to paste into a PR or wiki."),
+    ] = "text",
     as_json: Annotated[bool, typer.Option("--json", help="Print the raw server response.")] = False,
 ) -> None:
     """How much of the repository's knowledge is recorded, explained and confirmed by people."""
     days = _window_days(window)
     if not 7 <= days <= 365:
         raise typer.BadParameter("the window must be between 7 and 365 days")
+    if output_format not in ("text", "markdown"):
+        raise typer.BadParameter("the format must be text or markdown")
     root, config, token, repository_id = _api_context()
     if history:
         snapshots = _call(
@@ -496,6 +511,8 @@ def health_command(
     )
     if as_json:
         typer.echo(json.dumps(report, indent=2))
+    elif output_format == "markdown":
+        typer.echo(render_health_markdown.render_markdown(report, zones=zones), nl=False)
     else:
         typer.echo(render_health.render_health(report, zones=zones, explain=explain), nl=False)
 
