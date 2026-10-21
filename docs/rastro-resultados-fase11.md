@@ -1,6 +1,6 @@
 # Resultados da Fase 11: `rastro health`
 
-> Relatório vivo da [spec da Fase 11](spec-fase-11-rastro-health.md). Esta versão cobre os **passos 11.1 (núcleo), 11.2 (processo e proveniência), 11.3 (uso pelos agentes) e 11.4 (validação ultrapassada pelo código) 11.5 (instantâneos e tendência) e a parte de código do 11.6 (formato Markdown)**, feitos a 21/10/2026. As secções dos passos 11.2 a 11.6 acrescentam-se quando existirem.
+> Relatório vivo da [spec da Fase 11](spec-fase-11-rastro-health.md). **Fase construída (passos 11.1 a 11.6); a avaliação real ficou parcial, ver a secção 7.**
 
 ## 1. Passo 11.1: núcleo
 
@@ -222,3 +222,17 @@ Leituras:
 - **A fila não encurta quando se confirma uma regra sem motivo**: as 5 regras confirmadas continuam na fila com a razão `no_rationale`, só passam para depois das não confirmadas. É o desenho da spec (a fila pede motivo *e* confirmação), mas quem confirma 5 regras e vê o 5 a voltar à lista pode estranhar. **Ajustado a seguir a este teste:** uma regra confirmada e não ultrapassada a que só falta o motivo aparece como "confirmed; only the reason is missing" e o comando proposto passa a ser `rastro rule X --why "<the reason>"` em vez de `--confirm` (confirmar outra vez não mudaria nada). Escrever o motivo pede uma nova confirmação, e o texto di-lo.
 - O R3a só distingue autor e outro revisor com revisões do GitHub em que o autor do PR é conhecido; pela CLI fica `n/a`, como previsto. Continua por verificar num ciclo de PR real.
 - Os dados ficam na base de desenvolvimento (são confirmações reais do utilizador sobre regras reais).
+
+## 7. Fecho da fase
+
+**Construído:** `rastro health` (texto, `--format markdown`, `--json`, `--explain`, `--zones`, `--queue`, `--history`) sobre `rastro_db.health.build_report`, só SQL, sem modelo, sem nota composta, sem nada por pessoa; instantâneos diários com comparação só entre definições e janelas iguais; migrações `0012` a `0015`.
+
+**Verificado com dados reais (`bella-nina`):** todas as figuras contra SQL à mão (11.1 a 11.4), C1/C2 ponta a ponta, R5 num ciclo completo, e o teste de ação (5 confirmações subiram R3 de 3 para 8 de 27).
+
+**Por fazer (não foi medido, fica aberto):**
+- **Teste de leitura** com alguém que não conhece o projeto: o relatório Markdown real está pronto, falta a resposta da pessoa. Sem ela, o critério "a resposta é uma linha da fila ou das zonas" não está confirmado.
+- **R3a, P4, P5 com dados reais:** precisam de um ciclo de PR no GitHub com o autor conhecido e pelo menos 3 revisores distintos; com um só revisor ficam `n/a` por desenho.
+- **Pergunta da Fase 10** (perguntar só nas regras validadas?): continua sem resposta, há 8 regras confirmadas e a maioria pela CLI.
+- **Limites** (amostra pequena 10, janela 30 dias, fila 5): mantidos como na spec, sem evidência para os mudar. A única alteração por evidência foi a da fila (secção 6).
+- **Tendência real:** os instantâneos só começam no dia em que a tarefa corre; ainda não há dias suficientes para ler uma tendência.
+- Em PROD nada foi implantado (decisão adiada); a publicação do CLI também.
