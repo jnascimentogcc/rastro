@@ -6,7 +6,7 @@ Rastro preserves the *why* behind AI-generated code: it captures developer inten
 
 Phases 1 to 11 of the spec are built: capture, static analysis, GitHub App, rule extraction, anchor resync, pull request
 impact analysis, rules query, human validation, rules for the agent and the health report. MVP scope: TypeScript and
-JavaScript, Claude Code, GitHub, no web UI. Production deployment and publishing the CLI are decided later.
+JavaScript, Claude Code, GitHub, no web UI. Production deployment is decided later; the packages are ready to publish (see Releasing the packages).
 
 ## Development
 
@@ -89,30 +89,39 @@ Host ports can be changed with `POSTGRES_PORT` and `API_PORT` (defaults 5432 and
 repository token: `docker compose exec api python -m rastro_api.admin issue-token --github-id 1 --full-name owner/repo`.
 After pulling new code run `docker compose up -d --build` again; `migrate` runs before `api` and `worker` restart.
 
-## Releasing the CLI
+## Releasing the packages
 
-**Nothing is published yet** (license, final name and public or private index are still to be decided). The CLI is meant to be published as the distribution `rastro-cli` (the command is still `rastro`) and depends on
-`rastro-session-parsers`, which must be published first. The version lives in each package's
-`pyproject.toml`; bump both together when the parser API changes, and keep the `rastro-session-parsers`
-range in `packages/cli/pyproject.toml` in sync. The license field is a placeholder
-(`LicenseRef-Proprietary`) to be replaced before the first public release. The distribution is called
-`rastro-cli` because `rastro` is already taken on PyPI by another project; `rastro-cli` and
-`rastro-session-parsers` were free when checked (2026-10-17), so confirm they still are right before the
-first upload. The product name is provisional (spec), so renaming later only changes the distribution
-name: keep the `rastro` script or update the hook text in `rastro_cli/hook.py` too.
+Three distributions are published, in this order because each depends on the previous one:
+`rastro-session-parsers`, `rastro-cli` (the command is still `rastro`) and `rastro-mcp` (the read-only MCP
+server). The version lives in each package's `pyproject.toml`; bump them together when an API between them
+changes and keep the `rastro-session-parsers` range in `packages/cli/pyproject.toml` and the `rastro-cli`
+range in `packages/mcp/pyproject.toml` in sync. The license is proprietary (`LicenseRef-Proprietary`, with a
+`LICENSE` file in each package): the source is visible for installation and evaluation only. The distribution
+is called `rastro-cli` because `rastro` is already taken on PyPI by another project; the three names were free
+when checked (2026-10-21), so confirm they still are right before the first upload. The product name is
+provisional (spec), so renaming later only changes the distribution names: keep the `rastro` script or update
+the hook text in `rastro_cli/hook.py` too. A published version can never be replaced, so rehearse on TestPyPI.
 
 ```bash
 rm -rf dist
 uv build --package rastro-session-parsers -o dist
 uv build --package rastro-cli -o dist
-# smoke test in a throwaway tool dir, resolving the sibling wheel from dist/
+uv build --package rastro-mcp -o dist
+uvx twine check dist/*
+# smoke test in a throwaway tool dir, resolving the sibling wheel from dist/ (add --no-cache --reinstall if
+# a version was built before with different content: uv caches wheels by version)
 UV_TOOL_DIR=$(mktemp -d) UV_TOOL_BIN_DIR=$(mktemp -d) uv tool install --find-links dist ./dist/rastro_cli-<version>-py3-none-any.whl
-# publish (maintainers only): parsers first, then the CLI
-uv publish dist/rastro_session_parsers-* && uv publish dist/rastro_cli-*
+# publish (maintainers only; the token comes from the environment, never from a file in the repository):
+export UV_PUBLISH_TOKEN=...        # a TestPyPI token for a rehearsal, a PyPI token for the real thing
+uv publish --publish-url https://test.pypi.org/legacy/ dist/rastro_session_parsers-*   # rehearsal; drop --publish-url for PyPI
+uv publish --publish-url https://test.pypi.org/legacy/ dist/rastro_cli-*
+uv publish --publish-url https://test.pypi.org/legacy/ dist/rastro_mcp-*
 ```
 
 Users then run `pipx install rastro-cli` or `uvx --from rastro-cli rastro init` (`uvx` needs `--from`
-because the package and the command have different names). The git hook calls `rastro` by name, so the
+because the package and the command have different names). From TestPyPI the dependencies live on PyPI, so
+add `--extra-index-url https://pypi.org/simple/` (`pipx install --index-url https://test.pypi.org/simple/
+--pip-args="--extra-index-url https://pypi.org/simple/" rastro-cli`). The git hook calls `rastro` by name, so the
 tool's bin directory must be on the `PATH` git sees (`pipx ensurepath` / `uv tool update-shell`);
 `rastro init` warns when it is not.
 
