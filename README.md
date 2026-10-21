@@ -2,6 +2,12 @@
 
 Rastro preserves the *why* behind AI-generated code: it captures developer intent from coding-agent sessions, extracts business rules, anchors them to code, and warns on pull requests when a change may break one. See [docs/spec-rastro-mvp.md](docs/spec-rastro-mvp.md) for the full MVP spec.
 
+## Status
+
+Phases 1 to 11 of the spec are built: capture, static analysis, GitHub App, rule extraction, anchor resync, pull request
+impact analysis, rules query, human validation, rules for the agent and the health report. MVP scope: TypeScript and
+JavaScript, Claude Code, GitHub, no web UI. Production deployment and publishing the CLI are decided later.
+
 ## Development
 
 Requirements: [uv](https://docs.astral.sh/uv/) and Docker.
@@ -21,8 +27,8 @@ uv run uvicorn rastro_api.main:app --reload
 PROCRASTINATE_APP=rastro_worker.app.app uv run procrastinate worker
 ```
 
-Capture a session for a commit (phase 3). Until the GitHub App creates repositories (phase 4), issue a
-repository token by hand and point the CLI at the API:
+Capture a session for a commit. To try it without the GitHub App creating the repository (see the App setup
+below), issue a repository token by hand and point the CLI at the API:
 
 ```bash
 uv run python -m rastro_api.admin issue-token --github-id 1 --full-name owner/repo   # prints the token once
@@ -46,6 +52,24 @@ If a wider window (24 h) would have captured something the automatic one missed,
 rastro capture --sha <sha> --since 2026-10-05T11:30    # recapture with an explicit window start and upload (idempotent)
 ```
 
+Checks (the same ones CI runs):
+
+```bash
+uv run ruff check . && uv run ruff format --check .
+uv run mypy apps packages
+uv run pytest                              # all tests; DB tests need the compose Postgres
+uv run pytest apps/api/tests/test_health.py::test_health   # a single test
+uv run pytest -m "not db"                  # skip tests that need PostgreSQL
+```
+
+Create a migration after changing `packages/db/src/rastro_db/models.py`:
+
+```bash
+cd packages/db && uv run alembic revision --autogenerate -m "describe change"
+```
+
+Review the generated file: Alembic does not detect everything (for example `CREATE EXTENSION`).
+
 ## Running with Docker
 
 The compose file runs the whole stack: `postgres` (pgvector), a one-shot `migrate` service
@@ -67,7 +91,7 @@ After pulling new code run `docker compose up -d --build` again; `migrate` runs 
 
 ## Releasing the CLI
 
-The CLI is published as the distribution `rastro-cli` (the command is still `rastro`) and depends on
+**Nothing is published yet** (license, final name and public or private index are still to be decided). The CLI is meant to be published as the distribution `rastro-cli` (the command is still `rastro`) and depends on
 `rastro-session-parsers`, which must be published first. The version lives in each package's
 `pyproject.toml`; bump both together when the parser API changes, and keep the `rastro-session-parsers`
 range in `packages/cli/pyproject.toml` in sync. The license field is a placeholder
@@ -179,7 +203,7 @@ errors, model rate limits/timeouts/5xx and lost database connections. Permanent 
 may use per calendar month (UTC), summed from `llm_calls`. It is checked before a job starts:
 rule extraction marks the commit `skipped_budget` (re-run `rule_extraction` with `force` once
 there is budget), impact analysis returns `skipped_budget` without commenting, and `rastro rules
---query` falls back to text search. A job already running can overshoot by what it spends itself.
+--search` falls back to text search. A job already running can overshoot by what it spends itself.
 Unset or `0` means unlimited.
 
 If the OpenAI account runs out of credit the jobs do not retry (it cannot help): the affected commits
@@ -244,64 +268,6 @@ rastro rules --status orphaned                 # active (default), orphaned, sup
 rastro rules --limit 50 --json                 # raw server response
 rastro rule 4f3e2d1c                           # one rule: code anchors (primary/duplicate), review state and the commits behind it
 ```
-
-## Rules for the agent before it edits (phase 10, in progress)
-
-Steps 10.1 to 10.5 are in place; the evaluation is in `docs/rastro-resultados-fase10.md`.
-
-```bash
-rastro agent install            # hooks in .claude/settings.local.json (not committed) + first download of the rules
-rastro agent install --shared   # .claude/settings.json for the whole team; needs `rastro-hook` on their PATH
-rastro agent install --no-mcp   # hooks only; by default a local install also adds the read-only MCP server (.mcp.json, not committed)
-rastro agent uninstall          # removes only what install added (hooks and the MCP entry; --no-mcp keeps the latter)
-rastro sync                     # refresh .rastro/cache/rules.json by hand
-```
-
-`GET /v1/repos/{id}/rules/snapshot` returns every active rule with its active anchors (path and
-qualified name only, no quotes) and an `ETag` computed from the content, so a conditional request is
-answered with 304 only when nothing the agent would see has changed. The hook reads the cached copy,
-never the network: a `Read` of a file with rules gets them as `additionalContext`; an `Edit`/`Write`
-of a file not yet shown to that session or subagent is denied once with the same text. At session
-start it refreshes a stale cache in the background and tells the model how many rules exist; after
-`/clear` or a compaction everything is announced again. Every announcement is noted (file, rule ids,
-no text) in `.rastro/consulted.jsonl`, and the next `rastro capture` of that session uploads those
-lines with it (`agent_sessions.consulted`), the raw data for a future coverage metric: of the files with
-rules that a session edited, how many had been announced first. The hook is standard library only and exits 0 on any problem, so
-it can never block the agent.
-
-The `rastro-mcp` server (stdio, `packages/mcp`) answers on request, for agents that want to look something
-up rather than wait for a file read: `rastro_rules_for_file(path, symbol?)`, `rastro_search_rules(query, limit?)`
-and `rastro_get_rule(rule_id)`. All three only read and are marked `readOnlyHint`, so allowing `mcp__rastro`
-in `permissions.allow` is safe. It never exposes the original conversation quotes. See `docs/spec-fase-10-consulta-agente.md` and
-`docs/rastro-resultados-fase10.md`.
-
-## Health report (phase 11, in progress)
-
-```bash
-rastro health                  # how much of the knowledge is recorded, explained and confirmed
-rastro health --zones          # per directory: symbols, symbols with a rule, rules, confirmed, no reason
-rastro health --queue 10       # what to confirm first (0 hides it)
-rastro health --history        # the daily snapshots, most recent first
-rastro health --format markdown --zones   # tables to paste into a PR or wiki
-rastro health --explain        # how each figure is computed, where it comes from, what it does not prove
-rastro health --window 60d --exclude "src/legacy/*" --json
-```
-
-Steps 11.1 to 11.5 report the state of the knowledge base (rules by status, with a known reason, confirmed by a
-person, confirmations verified by GitHub or outdated by an edit, age of what nobody confirmed), warns
-when commits were not analysed (failures, budget, quota) because the figures may then be out of date, and
-lists the zones and a review queue. Every figure shows its numerator and denominator; what cannot be known
-is `n/a` with the reason, never 0%, and fewer than 10 cases are flagged as a small sample. It makes no
-model call and says nothing about individual people. Step 11.2 adds the process (proposals reviewed before
-the merge or integrated without review, verdicts on the extraction, withheld with fewer than three
-reviewers so they cannot point at a person), the share of confirmations made by someone other than the PR
-author, and the share of integrations with no recorded session. Step 11.3 adds agent use: of the files with rules that a session edited, how many the hook had announced
-before the first edit (split by whether the hook ran in that session, which the hook now proves with a
-marker at the start of every session), and in how many sessions the hook ran. Step 11.4 notes the code a person looked at when
-confirming a rule, so the report can say how many confirmations the code has overtaken since (and the
-review queue puts them back). Step 11.5 adds the trend: the worker stores the figures once a day (no
-model, no rule text), the report says what a figure was in the oldest comparable snapshot of the window, and
-`rastro health --history` lists the days. See `docs/spec-fase-11-rastro-health.md`.
 
 ## Validating rules (phase 9.1)
 
@@ -372,20 +338,65 @@ token. Semantic search embeds the query with the configured `EMBEDDING_MODEL` an
 above 0.3 cosine similarity; if the server has no embedding model, or the call fails, it falls
 back to a case-insensitive text match on the statement and the reason.
 
-Checks (the same ones CI runs):
+## Rules for the agent before it edits (phase 10)
+
+Built and evaluated (`docs/rastro-resultados-fase10.md`). The hook and the MCP make the agent tell the user
+that a recorded rule changes; they do not by themselves make it stop before editing, which in the evaluation came
+from project instructions asking to confirm.
 
 ```bash
-uv run ruff check . && uv run ruff format --check .
-uv run mypy apps packages
-uv run pytest                              # all tests; DB tests need the compose Postgres
-uv run pytest apps/api/tests/test_health.py::test_health   # a single test
-uv run pytest -m "not db"                  # skip tests that need PostgreSQL
+rastro agent install            # hooks in .claude/settings.local.json (not committed) + first download of the rules
+rastro agent install --shared   # .claude/settings.json for the whole team; needs `rastro-hook` on their PATH
+rastro agent install --no-mcp   # hooks only; by default a local install also adds the read-only MCP server (.mcp.json, not committed)
+rastro agent uninstall          # removes only what install added (hooks and the MCP entry; --no-mcp keeps the latter)
+rastro sync                     # refresh .rastro/cache/rules.json by hand
 ```
 
-Create a migration after changing `packages/db/src/rastro_db/models.py`:
+`GET /v1/repos/{id}/rules/snapshot` returns every active rule with its active anchors (path and
+qualified name only, no quotes) and an `ETag` computed from the content, so a conditional request is
+answered with 304 only when nothing the agent would see has changed. The hook reads the cached copy,
+never the network: a `Read` of a file with rules gets them as `additionalContext`; an `Edit`/`Write`
+of a file not yet shown to that session or subagent is denied once with the same text. At session
+start it refreshes a stale cache in the background and tells the model how many rules exist; after
+`/clear` or a compaction everything is announced again. Every announcement is noted (file, rule ids,
+no text) in `.rastro/consulted.jsonl`, and the next `rastro capture` of that session uploads those
+lines with it (`agent_sessions.consulted`), the raw data of the coverage figure of `rastro health`: of the files with
+rules that a session edited, how many had been announced first. The hook is standard library only and exits 0 on any problem, so
+it can never block the agent.
+
+The `rastro-mcp` server (stdio, `packages/mcp`) answers on request, for agents that want to look something
+up rather than wait for a file read: `rastro_rules_for_file(path, symbol?)`, `rastro_search_rules(query, limit?)`
+and `rastro_get_rule(rule_id)`. All three only read and are marked `readOnlyHint`, so allowing `mcp__rastro`
+in `permissions.allow` is safe. It never exposes the original conversation quotes. See `docs/spec-fase-10-consulta-agente.md` and
+`docs/rastro-resultados-fase10.md`.
+
+## Health report (phase 11)
 
 ```bash
-cd packages/db && uv run alembic revision --autogenerate -m "describe change"
+rastro health                  # how much of the knowledge is recorded, explained and confirmed
+rastro health --zones          # per directory: symbols, symbols with a rule, rules, confirmed, no reason
+rastro health --queue 10       # what to confirm first (0 hides it)
+rastro health --history        # the daily snapshots, most recent first
+rastro health --format markdown --zones   # tables to paste into a PR or wiki
+rastro health --explain        # how each figure is computed, where it comes from, what it does not prove
+rastro health --window 60d --exclude "src/legacy/*" --json
 ```
 
-Review the generated file: Alembic does not detect everything (for example `CREATE EXTENSION`).
+Built (steps 11.1 to 11.6). The report covers the knowledge base (rules by status, with a known reason, confirmed
+by a person, confirmations verified by GitHub, by someone other than the PR author, outdated by an edit or by a
+change in the code, age of what nobody confirmed), the process (proposals reviewed before the merge or integrated
+without review, verdicts on the extraction), agent use (files with rules announced by the hook before the first edit,
+sessions where the hook ran), code integrated with no recorded session, zones (directories) and a review queue. It
+warns when commits were not analysed (failures, budget, quota) because the figures may then be out of date.
+
+Rules of the report: every figure shows its numerator and denominator; what cannot be known is `n/a` with the
+reason, never 0%; fewer than 10 cases are flagged as a small sample; time to first review and verdicts are withheld
+with fewer than three reviewers so they cannot point at a person; there is no composite score, no model call and
+nothing about individual people. A confirmed rule that only lacks a reason shows up in the queue with a `--why`
+command. The worker stores the figures once a day (03:00, active repositories, no rule text) and the report says what
+a figure was in the oldest comparable snapshot of the window (same definitions and window); `--history` lists the days.
+Snapshots start the day the worker first runs, so a trend needs the worker running for a while.
+
+Still open from the evaluation (`docs/rastro-resultados-fase11.md`, section 7): the reading test with someone who
+does not know the project, live figures for "other than the PR author" and the process timings (they need a real PR
+review by at least three people), and tuning of the limits. Spec: `docs/spec-fase-11-rastro-health.md`.
