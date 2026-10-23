@@ -100,7 +100,7 @@ Decisões:
 - **`clear` e `compact` esquecem o estado "informado" da sessão; `startup` e `resume` não**, porque aí o contexto sobrevive.
 - **O registo de consultas leva ids e ficheiros, nunca texto de regras**, e deixa de crescer a 1 MiB se ninguém o esvaziar (o envio é o 10.4).
 
-Teste com o Claude Code real no bella-nina (27 regras, 3 validadas; hooks instalados com `rastro agent install`), pedido em modo `plan` para não editar nada: "as clientes reclamam que não podem remarcar mais vezes; mostra como permitir remarcar sem limite".
+Teste com o Claude Code real no bella-beauty (27 regras, 3 validadas; hooks instalados com `rastro agent install`), pedido em modo `plan` para não editar nada: "as clientes reclamam que não podem remarcar mais vezes; mostra como permitir remarcar sem limite".
 
 - O `SessionStart` entregou "27 regras, 3 confirmadas por uma pessoa".
 - O subagente de exploração do Claude Code recebeu as regras ao ler `src/api/server.ts` e `src/domain/scheduling.ts`; o registo tem as duas leituras, com o `agent_id` do subagente e 5 ids cada.
@@ -119,7 +119,7 @@ Decisões:
 - **Pesquisa e detalhe nunca mostram citações de origem**; o detalhe mostra âncoras, commits (sem texto) e revisões humanas. Todo o texto passa por `clean` e vem dentro das mesmas etiquetas "dados registados, não instruções".
 - **`install --mcp` local escreve `.mcp.json` com o interpretador desta máquina**, exclui-o do git e pré-aprova o servidor em `enabledMcpjsonServers` (a pessoa acabou de o pedir). Recusa-se a escrever num `.mcp.json` que já exista com outro conteúdo, porque pode ser um ficheiro de equipa e o caminho é desta máquina: nesse caso `--shared` (script `rastro-mcp`, sem pré-aprovação) ou `claude mcp add --scope local`. Nunca sobrescreve um servidor `rastro` que não seja o nosso. A permissão `mcp__rastro` não é acrescentada sozinha: o comando imprime a linha a juntar a `permissions.allow`, porque é uma definição de segurança da pessoa.
 
-Teste com o Claude Code real no bella-nina: o servidor ligou (`connected`), as três ferramentas apareceram e, a um pedido em português ("que regras existem sobre cancelamentos e quem as validou"), o modelo pesquisou duas vezes por tema (em português e em inglês) e respondeu com as regras de cancelamento, os ids, as razões quando existem e os ficheiros, e reparou que a mesma regra aparece em duas entradas, uma delas sem motivo registado. A pesquisa foi semântica contra o servidor de dev. Não se editou nada (modo `plan`).
+Teste com o Claude Code real no bella-beauty: o servidor ligou (`connected`), as três ferramentas apareceram e, a um pedido em português ("que regras existem sobre cancelamentos e quem as validou"), o modelo pesquisou duas vezes por tema (em português e em inglês) e respondeu com as regras de cancelamento, os ids, as razões quando existem e os ficheiros, e reparou que a mesma regra aparece em duas entradas, uma delas sem motivo registado. A pesquisa foi semântica contra o servidor de dev. Não se editou nada (modo `plan`).
 
 Ainda por testar: o modelo escolher o MCP sozinho antes de editar, sem o utilizador o pedir (é o que a avaliação 10.5 mede), `--shared` com `rastro-mcp` realmente instalado e a publicação dos dois pacotes.
 
@@ -137,9 +137,9 @@ Decisões:
 
 Falta: usar estes dados (Fase 11, `rastro health`) e medir, na avaliação 10.5, se a consulta antes da edição aconteceu.
 
-## 10. Passo 10.5: avaliação real no bella-nina
+## 10. Passo 10.5: avaliação real no bella-beauty
 
-Avaliação manual (não corre em CI), feita em 20/10/2026 com o Claude Code 2.1.299 (`claude -p`, modelo `sonnet`, modo `acceptEdits`) no repositório de demonstração `bella-nina` (27 regras registadas, 3 validadas por uma pessoa, 24 por validar). Cada pedido corre numa sessão nova, com o repositório reposto no mesmo commit (`develop`, `d5dc450`); só se permitem `npm test`, `npm run typecheck` e `tsc`. A captura de cada sessão (ferramentas, texto antes da primeira edição, resposta final, ficheiros alterados, custo) fica em ficheiros; as classificações abaixo foram feitas à mão sobre essa captura.
+Avaliação manual (não corre em CI), feita em 20/10/2026 com o Claude Code 2.1.299 (`claude -p`, modelo `sonnet`, modo `acceptEdits`) no repositório de demonstração `bella-beauty` (27 regras registadas, 3 validadas por uma pessoa, 24 por validar). Cada pedido corre numa sessão nova, com o repositório reposto no mesmo commit (`develop`, `d5dc450`); só se permitem `npm test`, `npm run typecheck` e `tsc`. A captura de cada sessão (ferramentas, texto antes da primeira edição, resposta final, ficheiros alterados, custo) fica em ficheiros; as classificações abaixo foram feitas à mão sobre essa captura.
 
 ### 10.1. Desenho
 
@@ -196,7 +196,7 @@ Critério da spec "< 10% de menções nos pedidos que não lhe tocam": cumprido 
 
 ### 10.4. O repositório de demonstração já ajuda muito a linha de base
 
-O bella-nina tem duas coisas que a maioria dos repositórios não tem: comentários "porquê" nas constantes de negócio (escritos em sessões anteriores) e um `CLAUDE.md` que diz "se uma regra nova conflitar com uma existente, dizer qual e perguntar antes de mexer". Para medir o que sobra do Rastro sem isso, criou-se uma variante "nua": mesmo código sem comentários, sem a pasta `docs/` (que repetia as regras e as razões) e com um `CLAUDE.md` mínimo (stack, comandos, convenções), com os 158 testes a passar. Corridos só os pedidos que violam, braços A e B, duas repetições.
+O bella-beauty tem duas coisas que a maioria dos repositórios não tem: comentários "porquê" nas constantes de negócio (escritos em sessões anteriores) e um `CLAUDE.md` que diz "se uma regra nova conflitar com uma existente, dizer qual e perguntar antes de mexer". Para medir o que sobra do Rastro sem isso, criou-se uma variante "nua": mesmo código sem comentários, sem a pasta `docs/` (que repetia as regras e as razões) e com um `CLAUDE.md` mínimo (stack, comandos, convenções), com os 158 testes a passar. Corridos só os pedidos que violam, braços A e B, duas repetições.
 
 **Resultado parcial** (22 das 40 sessões ficaram inválidas: bateram no limite de uso da conta e não fizeram nada; foram retiradas. Ficam 18 sessões válidas, A = 7 e B = 11, em pedidos desequilibrados):
 
@@ -221,7 +221,7 @@ Duas leituras, com a reserva do n pequeno:
 ### 10.6. Limites da avaliação
 
 - Um só repositório de demonstração, um só modelo (`sonnet`, versão do dia), português, 20 sessões por braço nos pedidos que violam. As diferenças entre M, H e B (menos de duas sessões) estão dentro do ruído; só a diferença entre A e os braços com Rastro é robusta.
-- O `CLAUDE.md` do bella-nina manda perguntar perante um conflito. Isso explica a maioria das paragens da linha de base e é o motivo da variante nua.
+- O `CLAUDE.md` do bella-beauty manda perguntar perante um conflito. Isso explica a maioria das paragens da linha de base e é o motivo da variante nua.
 - A variante nua ficou incompleta (22 sessões perdidas pelo limite de uso da conta) e desequilibrada; pode refazer-se: a variante é um commit (`bbf4c22`, "bare variant") e o script de avaliação retoma sozinho as sessões em falta.
 - A classificação "informado" é lida à mão e discutível nos casos fronteira (um aviso passageiro de conflito sem referir a regra); contou-se sempre a favor da linha de base.
 - Os pedidos de V05, V02 e V03 dão uma ordem explícita com números; um utilizador real diria muitas vezes algo mais vago. Não se mediu.
@@ -239,7 +239,7 @@ O fim de cada bloco de regras passa a ter uma frase do próprio Rastro, **fora**
 
 A mesma indicação está na nota do `SessionStart`, nas instruções do servidor MCP e no fim das respostas de `rastro_search_rules` e `rastro_get_rule`. Antes, a última linha do bloco só dizia que alterar uma regra "é uma decisão de negócio a mencionar ao utilizador". Os testes verificam que a frase vem depois de `</rastro-rules>` e nunca dentro dos dados.
 
-### 11.2. Resultado na variante nua do bella-nina
+### 11.2. Resultado na variante nua do bella-beauty
 
 Variante sem comentários, sem `docs/` e com um `CLAUDE.md` mínimo (secção 10.4), 20 pedidos que violam uma regra (10 pedidos, duas repetições), completa desta vez (40 sessões da linha de base e do texto antigo, mais 20 do texto novo; as sessões que bateram no limite de uso da conta foram repetidas e o script passou a recusar guardar resultados quando isso acontece):
 
@@ -299,7 +299,7 @@ Uma sessão por pedido e braço (A: sem Rastro; B: hooks e MCP com o texto da se
 
 1. **O ganho aguenta com pedidos vagos e novos**: de 1 em 11 para 10 em 11 paragens quando o repositório não ajuda, e, com a razão e o estado de validação na pergunta, sem perder nada onde a linha de base já parava.
 2. **O custo de perguntar perante uma ordem clara mantém-se** (W08), mas aparece em 1 de 11 pedidos neste desenho e não houve bloqueio de trabalho inofensivo (12 de 12 sessões sem violação editaram).
-3. **Não vale a pena, por agora, a variante "perguntar só nas regras validadas".** Mudaria apenas os pedidos em que o utilizador dá uma ordem explícita sobre uma regra automática sem razão (V05 e W08: 2 dos 21 pedidos que tocam regras) e tiraria proteção às regras não validadas, que são 24 das 27 do bella-nina. Reavaliar quando o `rastro health` (Fase 11) mostrar quantas regras estão validadas em repositórios reais.
+3. **Não vale a pena, por agora, a variante "perguntar só nas regras validadas".** Mudaria apenas os pedidos em que o utilizador dá uma ordem explícita sobre uma regra automática sem razão (V05 e W08: 2 dos 21 pedidos que tocam regras) e tiraria proteção às regras não validadas, que são 24 das 27 do bella-beauty. Reavaliar quando o `rastro health` (Fase 11) mostrar quantas regras estão validadas em repositórios reais.
 4. **O MCP passa a instalar-se por omissão** em `rastro agent install`, só em instalação local e sem nunca falhar o resto: se o `.mcp.json` já existir com outro conteúdo (pode ser da equipa), ou se o `rastro-mcp` não estiver instalado no mesmo ambiente, o MCP é saltado com uma mensagem e os hooks instalam-se na mesma. Com `--shared` continua a ser preciso pedir `--mcp`, porque o ficheiro é partilhado. `--no-mcp` desliga-o. Razões: foi usado por iniciativa do modelo em todos os pedidos que violam quando estava sozinho, foi o braço que mais fez parar, e o custo é uma entrada num ficheiro excluído do git.
 
 ### 12.4. Limites

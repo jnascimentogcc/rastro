@@ -4,7 +4,7 @@
 
 ## 1. Porquê
 
-A regra de ouro do Rastro é **nunca inventar o porquê**: se a conversa não o explica, `rationale` fica `null`. É a decisão certa, mas tem um custo que o `rastro health` tornou visível: no `bella-nina` só **7 de 27 regras (26%) têm porquê**, e a fila de revisão abre com regras de datas, intervalos e horários, todas sem porquê. Um agente que consulta essas regras lê "Porquê: não registado". Um revisor que as confirma confirma uma frase sem razão.
+A regra de ouro do Rastro é **nunca inventar o porquê**: se a conversa não o explica, `rationale` fica `null`. É a decisão certa, mas tem um custo que o `rastro health` tornou visível: no `bella-beauty` só **7 de 27 regras (26%) têm porquê**, e a fila de revisão abre com regras de datas, intervalos e horários, todas sem porquê. Um agente que consulta essas regras lê "Porquê: não registado". Um revisor que as confirma confirma uma frase sem razão.
 
 Hoje existem canais soltos para suprir a falta: `/rastro why <id> <texto>` no PR e `rastro rule <id> --why` na CLI. Falta o essencial: **um só caminho de escrita**, um **estado explícito** para cada regra sem porquê (incluindo "ninguém sabe"), a **pergunta feita no PR**, onde as propostas já aparecem, e a **medida** de se isso resultou. Este é o núcleo; o resto do ciclo ideal (seguimento, recolha da conversa, agente) só vale a pena com mais utilizadores (secção 11).
 
@@ -14,7 +14,7 @@ Hoje existem canais soltos para suprir a falta: `/rastro why <id> <texto>` no PR
 - Responder custa **uma linha**, no PR ou na CLI.
 - **Nunca se insiste**: um pedido por proposta (o da própria pergunta no PR), registado uma só vez mesmo que o comentário seja reescrito (teste automático).
 - Um porquê só entra com palavras de uma pessoa. Nenhum caminho de escrita aceita texto composto por um modelo (teste automático).
-- No `bella-nina`, com o dono a responder: a percentagem de regras com porquê **ou** "ninguém sabe" confirmado sobe de forma mensurável, e o relatório mostra de que canal veio cada resposta.
+- No `bella-beauty`, com o dono a responder: a percentagem de regras com porquê **ou** "ninguém sabe" confirmado sobe de forma mensurável, e o relatório mostra de que canal veio cada resposta.
 - Nenhuma chamada ao LLM é acrescentada pela fase (teste automático).
 
 ## 3. Decisões de desenho
@@ -133,7 +133,7 @@ A fila de revisão passa a pôr os "ninguém sabe" depois das regras ainda pergu
 - `health`: W1 a W4, separação das origens do R2, fila com "ninguém sabe" depois das perguntáveis; isolamento por repositório; nenhuma chamada ao LLM em toda a fase.
 
 **Avaliação real**
-- No `bella-nina`, com o dono a responder a pedidos reais (os do PR e `rastro rules --without-why`): ler W1 a W4. Em particular, quantas das 20 regras sem porquê passam a ter razão ou "ninguém sabe", e quantas respostas teriam sido recusadas pelo mínimo de D5.
+- No `bella-beauty`, com o dono a responder a pedidos reais (os do PR e `rastro rules --without-why`): ler W1 a W4. Em particular, quantas das 20 regras sem porquê passam a ter razão ou "ninguém sabe", e quantas respostas teriam sido recusadas pelo mínimo de D5.
 - Escrever `docs/rastro-resultados-fase12.md` com o resultado e com a decisão sobre retomar ou não a secção 11.
 
 ## 9. Plano de implementação
@@ -144,7 +144,7 @@ Cada passo termina com testes a passar e entrega valor sozinho.
 
 **12.1b Medida inicial.** Logo a seguir à 12.1: W1 (estados), W3 (canais) e a separação das origens no R2 no `rastro health`, para que o passo seguinte já tenha onde se medir.
 
-**12.2 PR.** Pergunta explícita nas propostas, `unknown`, registo dos pedidos (uma vez por pergunta publicada), comandos por id de proposta ou de regra; acrescenta W2 e W4. Termina com a avaliação real no `bella-nina` e `docs/rastro-resultados-fase12.md`.
+**12.2 PR.** Pergunta explícita nas propostas, `unknown`, registo dos pedidos (uma vez por pergunta publicada), comandos por id de proposta ou de regra; acrescenta W2 e W4. Termina com a avaliação real no `bella-beauty` e `docs/rastro-resultados-fase12.md`.
 
 Ordem: 12.1 primeiro porque dá a base única a todos os canais; 12.1b logo depois para haver medida cedo; 12.2 por fim, porque é o que muda o que as pessoas veem.
 
@@ -167,8 +167,8 @@ Um trabalho periódico (com `queueing_lock`) procura regras ativas criadas sem p
 **Retomar quando:** houver uma equipa e pedidos do PR sem resposta que justifiquem um lembrete.
 
 ### 12.4 Recolha da conversa
-Ao receber uma sessão que anunciou regras **sem porquê** (o registo `consulted`), um modo novo de extração, só de recolha, dá ao modelo essas regras e as mensagens humanas **posteriores** ao anúncio. A resposta tem de citar o id da regra e uma frase **literal** de uma mensagem humana; passa a verificação de palavras distintivas com confiança mínima de 0,7. O resultado é um **candidato** (`why_candidates`: `rule_id`, `session_ref`, `quote`, `confidence`, `state shadow|offered|accepted|rejected`, único por regra, sessão e citação), **nunca** um porquê escrito na regra. Duas fases: **sombra** (nada é mostrado, mede-se precisão e alcance, só se avança com precisão >= 95% medida também em candidatos reais) e **oferecida** (mostrado no PR com `/rastro why <id> --from-conversation` e na CLI com `--accept-conversation`; só quando uma pessoa aceita é que `record_rationale` escreve com `rationale_source = 'conversation'`, com a pessoa que aceitou como autora; recusado não volta a ser oferecido). O R2 passaria a separar `conversation`. Modelo indisponível, sem orçamento ou com falha transitória segue as regras da extração normal. Avaliação: sessões do `bella-nina` e da fixture `clinica-demo` com o porquê dado depois do anúncio, com o porquê dado para **outra** coisa, e sem porquê, etiquetadas à mão.
-**Retomar quando:** houver sessões suficientes com motivos dados depois do anúncio (medir antes, à mão, quantas há no `bella-nina`) e o custo do modelo for aceitável.
+Ao receber uma sessão que anunciou regras **sem porquê** (o registo `consulted`), um modo novo de extração, só de recolha, dá ao modelo essas regras e as mensagens humanas **posteriores** ao anúncio. A resposta tem de citar o id da regra e uma frase **literal** de uma mensagem humana; passa a verificação de palavras distintivas com confiança mínima de 0,7. O resultado é um **candidato** (`why_candidates`: `rule_id`, `session_ref`, `quote`, `confidence`, `state shadow|offered|accepted|rejected`, único por regra, sessão e citação), **nunca** um porquê escrito na regra. Duas fases: **sombra** (nada é mostrado, mede-se precisão e alcance, só se avança com precisão >= 95% medida também em candidatos reais) e **oferecida** (mostrado no PR com `/rastro why <id> --from-conversation` e na CLI com `--accept-conversation`; só quando uma pessoa aceita é que `record_rationale` escreve com `rationale_source = 'conversation'`, com a pessoa que aceitou como autora; recusado não volta a ser oferecido). O R2 passaria a separar `conversation`. Modelo indisponível, sem orçamento ou com falha transitória segue as regras da extração normal. Avaliação: sessões do `bella-beauty` e da fixture `clinica-demo` com o porquê dado depois do anúncio, com o porquê dado para **outra** coisa, e sem porquê, etiquetadas à mão.
+**Retomar quando:** houver sessões suficientes com motivos dados depois do anúncio (medir antes, à mão, quantas há no `bella-beauty`) e o custo do modelo for aceitável.
 
 ### 12.5 O agente
 Duas indicações do próprio Rastro, fora da etiqueta de dados: **ao tocar** numa regra sem porquê, e só se o pedido a muda ou contradiz, pedir também a razão numa frase; **ao criar** comportamento de negócio (limite, preço, prazo, permissão) sem que o pedido diga porquê, perguntar o porquê numa frase antes de implementar. A segunda vai na nota do `SessionStart` e nas instruções do MCP (o hook só dispara em ficheiros que já têm regras). O agente pode reencaminhar a resposta com `rastro rule <id> --why "<palavras do utilizador>" --relayed` pelo `Bash`, com o comando visível para aprovação (sem ferramenta MCP de escrita, que a Fase 10 rejeitou); a origem fica `human_relayed`, separada de `human` no `health`. **Critério fixado antes de medir:** o ruído nos pedidos sem relação não pode subir mais de 3 pontos percentuais sobre a linha de base da Fase 10; se subir, "ao criar" fica opcional (`rastro agent install --ask-why`) e só "ao tocar" é o padrão. Avaliação: a bateria da Fase 10 mais pedidos que **criam** regras novas; medir se pergunta quando o pedido não diz o porquê, se deixa de perguntar quando diz, e se confirma `human_relayed` no relatório.
@@ -179,6 +179,6 @@ Duas indicações do próprio Rastro, fora da etiqueta de dados: **ao tocar** nu
 
 ## 12. Questões em aberto
 
-- **Valores dos limites** (12 caracteres de D5): palpites. Ajustar com respostas reais do `bella-nina`.
+- **Valores dos limites** (12 caracteres de D5): palpites. Ajustar com respostas reais do `bella-beauty`.
 - **Confirmar ao escrever o porquê:** `--confirm` é um atalho opcional. Alguém que escreve a razão e a vê como "por confirmar" pode estranhar; ponderar tornar `--confirm` o comportamento por omissão na CLI (mas não no PR).
 - **Um "porquê" fraco** ("o cliente pediu") sobe a percentagem sem acrescentar conhecimento. Com uma só origem humana a separação do R2 não ajuda ainda; reavaliar com `human_relayed` e `conversation` se a secção 11 for retomada.

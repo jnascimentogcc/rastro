@@ -1,8 +1,8 @@
-# Production stack for a shared server (next to Azmt and Radar Publico).
+# Production stack for a server that already runs a Caddy (or another reverse proxy) for other sites.
 #
 #   docker compose -f docker-compose.prod.yml up --build -d
 #
-# Nothing is published on the host: the shared Caddy (container azmt-caddy) reaches `rastro-api`
+# Nothing is published on the host: the existing Caddy container reaches `rastro-api`
 # over the external Docker network `proxy` (docker network create proxy). Postgres and the worker
 # stay on this project's private network. Required settings come from .env (see
 # deploy/env.prod.example); deploy/install.sh generates the secrets.

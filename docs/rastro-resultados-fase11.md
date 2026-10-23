@@ -15,7 +15,7 @@ Feito: `rastro_db.health.build_report`, `GET /v1/repos/{id}/health` e `rastro he
 
 Cada número traz numerador e denominador. Sem denominador, aparece `n/a` com a razão; abaixo de 10 casos aparece "small sample". Não há nota única nem nada por pessoa.
 
-### Verificação no `bella-nina` real
+### Verificação no `bella-beauty` real
 
 Contra a pilha de desenvolvimento, `rastro health` e uma contagem manual em SQL dão o mesmo:
 
@@ -28,7 +28,7 @@ Contra a pilha de desenvolvimento, `rastro health` e uma contagem manual em SQL 
 | Ultrapassadas pela regra | 0 de 3 | 0 |
 | Por confirmar / mais antiga | 24 / 2 dias | 24 / 2 dias |
 
-O que o relatório diz do `bella-nina`: **só 26% das regras têm porquê e só 11% foram confirmadas por uma pessoa**; a fila abre com regras de datas e fusos, de intervalos entre atendimentos e de horário de funcionamento, todas sem porquê e com 2 a 4 chamadores. As 3 confirmadas passaram todas pelo GitHub. Não há aviso de pipeline.
+O que o relatório diz do `bella-beauty`: **só 26% das regras têm porquê e só 11% foram confirmadas por uma pessoa**; a fila abre com regras de datas e fusos, de intervalos entre atendimentos e de horário de funcionamento, todas sem porquê e com 2 a 4 chamadores. As 3 confirmadas passaram todas pelo GitHub. Não há aviso de pipeline.
 
 ### Desempenho
 
@@ -43,7 +43,7 @@ Num repositório sintético de 5 000 regras, 20 000 símbolos (cerca de 50 000 l
 - **R4** divide pelas regras que alguma vez foram confirmadas (confirmadas e ultrapassadas), e não pelas ativas, porque pergunta "das que alguém confirmou, quantas mudaram depois".
 - **R3b** só olha para a origem da revisão que deu a confirmação. Uma regra confirmada sem linha em `rule_reviews` conta como não verificada.
 - **A fila e as zonas** são lidas do estado atual; não há tendência até ao passo 11.5.
-- **Ficou de fora de propósito** (precisa de dados que os passos seguintes passam a gravar): R3a (quem não é o autor do PR), R5 (código mudou depois de validar), P1 a P5, V1, C1 e C2, e os instantâneos. O estado do `bella-nina` confirma porquê: `reviewer_is_session_author` está nulo em todas as revisões e nenhum commit tem `skipped_no_session`.
+- **Ficou de fora de propósito** (precisa de dados que os passos seguintes passam a gravar): R3a (quem não é o autor do PR), R5 (código mudou depois de validar), P1 a P5, V1, C1 e C2, e os instantâneos. O estado do `bella-beauty` confirma porquê: `reviewer_is_session_author` está nulo em todas as revisões e nenhum commit tem `skipped_no_session`.
 - **`--queue N`** é uma contagem (0 esconde a fila) e não um simples interruptor como a spec sugere; mostra por omissão 5.
 - **Sem `--format markdown` nem `--history`:** são dos passos 11.5 e 11.6.
 
@@ -56,7 +56,7 @@ Feito: migração `0012`, o registo de três factos novos pelos trabalhos que j�
 | Facto | Onde | Como |
 |---|---|---|
 | Autor do PR | `rule_proposals.pr_author` | o webhook `pull_request` passa `user.login` ao `analyze_pr` e ao `pull_request_merged`; só preenche propostas que ainda não têm autor |
-| PR a que um commit pertence | `commits.merged_pr_number` | gravado nos commits do PR e no commit de merge ou squash; um commit mantém o primeiro PR com que foi registado. A migração preenche os commits que já tinham propostas (3 no `bella-nina`) |
+| PR a que um commit pertence | `commits.merged_pr_number` | gravado nos commits do PR e no commit de merge ou squash; um commit mantém o primeiro PR com que foi registado. A migração preenche os commits que já tinham propostas (3 no `bella-beauty`) |
 | Revisor é o autor do PR | `rule_reviews.reviewer_is_pr_author` | compara dois logins do GitHub, sem distinguir maiúsculas, quando a revisão é aplicada no merge: verdadeiro, falso, ou nulo se o autor do PR não é conhecido. As revisões da CLI ficam nulas |
 
 A marca antiga `reviewer_is_session_author` continua a existir mas não é usada: compara o nome do autor do commit com um login e nunca é falsa.
@@ -68,7 +68,7 @@ A marca antiga `reviewer_is_session_author` continua a existir mas não é usada
 - **V1:** integrações sem sessão registada, por unidade de integração (um PR com os seus commits e o commit de merge, datado pelo mais recente; ou um commit direto com sessão).
 - **Privacidade (D3):** P4 e P5 só aparecem com pelo menos 3 revisores distintos na janela; abaixo disso mostram `n/a` e a razão. Os totais que não nomeiam ninguém (P1 a P3) aparecem sempre.
 
-### Verificação no `bella-nina` real
+### Verificação no `bella-beauty` real
 
 Contra a pilha reconstruída, `rastro health --window 365d` e a contagem manual em SQL dão o mesmo:
 
@@ -86,7 +86,7 @@ O que isto diz da equipa de demonstração: todas as propostas foram revistas an
 
 - **Commits diretos sem sessão ficam fora do rácio de V1** (`unattributed_commits`), contra a spec original, que os contava como "sem intenção registada". Na base real não se distinguem de commits de merge anteriores à coluna `merged_pr_number`, e contá-los daria 68% de código "sem intenção" que na maior parte não o é. Quando houver histórico suficiente depois de `0012`, pode voltar a entrar.
 - **Uma unidade é datada pelo commit mais recente**, porque os commits do PR são mais antigos do que o merge que os integra; sem isto um squash recente apareceria sozinho, sem as sessões dos commits originais.
-- **Falta testar ao vivo** o caminho completo (um PR novo no `bella-nina` com três revisores diferentes), que é o que dá números a R3a, P4 e P5. Os testes automáticos cobrem cada passo: webhook com e sem `user`, `pr_author` só em propostas vazias, marca do revisor verdadeira, falsa e nula, `merged_pr_number` nos commits e no commit de squash, e cada figura sobre dados feitos à mão.
+- **Falta testar ao vivo** o caminho completo (um PR novo no `bella-beauty` com três revisores diferentes), que é o que dá números a R3a, P4 e P5. Os testes automáticos cobrem cada passo: webhook com e sem `user`, `pr_author` só em propostas vazias, marca do revisor verdadeira, falsa e nula, `merged_pr_number` nos commits e no commit de squash, e cada figura sobre dados feitos à mão.
 
 ## 3. Passo 11.3: uso pelos agentes
 
@@ -110,7 +110,7 @@ Por **sessão**, e não por captura, porque as consultas seguem com a primeira c
 - **C2:** sessões em que o hook correu, sobre as que têm o estado conhecido.
 - Sem edições de ficheiros com regras, ou sem nenhuma CLI que diga o estado, o relatório diz-o em vez de mostrar 0%.
 
-### Verificação ponta a ponta no `bella-nina`
+### Verificação ponta a ponta no `bella-beauty`
 
 Com o Claude Code real: `rastro agent install`, uma sessão a pedir um comentário numa função com regra (`hasReachedRescheduleLimit`), commit (que dispara a captura), e `rastro health`.
 
@@ -153,7 +153,7 @@ Das regras ativas confirmadas, quantas têm hoje, em alguma âncora, um `body_ha
 - As confirmações sem hashes (as anteriores a esta fase, ou sem âncoras ativas) ficam em "desconhecidas" e fora do denominador; se não houver nenhuma com hashes, o R5 diz `n/a` com a razão.
 - Uma regra ultrapassada entra na fila de revisão com o motivo `validation_outdated_by_code`, mesmo tendo razão e confirmação.
 
-### Verificação no `bella-nina` real
+### Verificação no `bella-beauty` real
 
 Num ciclo completo contra a pilha reconstruída:
 
@@ -161,7 +161,7 @@ Num ciclo completo contra a pilha reconstruída:
 2. Alterei o `body_hash` de um símbolo âncora dessa regra, a simular uma edição do código: o R5 passou a **1 of 1 (100%)**.
 3. Repus tudo (hashes, a linha de revisão e a validação da regra); o relatório voltou a "3 of 27" e a R5 `n/a`, porque as 3 confirmações que já existiam são anteriores aos hashes.
 
-As 3 regras confirmadas que o `bella-nina` já tinha ficam portanto em "desconhecidas" para sempre: confirmações antigas não se retro-preenchem, porque não se sabe que código a pessoa viu.
+As 3 regras confirmadas que o `bella-beauty` já tinha ficam portanto em "desconhecidas" para sempre: confirmações antigas não se retro-preenchem, porque não se sabe que código a pessoa viu.
 
 ### Decisões e limites
 
@@ -191,13 +191,13 @@ Uma linha por repositório e dia (`UNIQUE (repository_id, taken_on)`): `window_d
 - **Sem preenchimento do histórico:** os instantâneos começam no dia em que a tarefa corre pela primeira vez; não se reconstrói o passado.
 - **Só o trabalhador escreve** instantâneos; o relatório e a rota de histórico não escrevem nada (há um teste).
 - **A comparação é com o mais antigo da janela**, não com o de ontem: lê-se "o que mudou nos últimos 30 dias", que é a pergunta do relatório.
-- Ainda não há dias suficientes de instantâneos no `bella-nina` para uma tendência com sentido; a verificação real fica para o passo 11.6.
+- Ainda não há dias suficientes de instantâneos no `bella-beauty` para uma tendência com sentido; a verificação real fica para o passo 11.6.
 
 ## 6. Passo 11.6 (parte de código): formato Markdown e relatórios de referência
 
 - `rastro health --format markdown` (com `--zones` e `--queue`) imprime o relatório em tabelas, para colar num PR ou numa wiki. Um formato desconhecido é recusado antes de perguntar ao servidor. O texto das regras vem do servidor, por isso o `|` e as quebras de linha são neutralizados dentro das células.
 - Dois relatórios de referência (`packages/cli/tests/golden/health.txt` e `health.md`) apanham alterações acidentais de formato; regeneram-se de propósito com `RASTRO_UPDATE_GOLDEN=1`.
-- No `bella-nina` real o relatório Markdown sai completo (27 regras ativas, 3 confirmadas, fila com 8 regras). Nota: no Windows é preciso `PYTHONIOENCODING=utf-8` para redirecionar a saída para um ficheiro sem estragar os acentos (já era assim com o formato de texto).
+- No `bella-beauty` real o relatório Markdown sai completo (27 regras ativas, 3 confirmadas, fila com 8 regras). Nota: no Windows é preciso `PYTHONIOENCODING=utf-8` para redirecionar a saída para um ficheiro sem estragar os acentos (já era assim com o formato de texto).
 
 ### Ainda por fazer (avaliação real, precisa de pessoas ou de dados novos)
 
@@ -205,7 +205,7 @@ Uma linha por repositório e dia (`UNIQUE (repository_id, taken_on)`): `window_d
 - Pergunta da Fase 10 (perguntar só nas regras validadas): precisa de mais regras validadas do que as 3 que existem.
 - Ajuste dos limites (amostra pequena, janela, tamanho da fila) com base nessas leituras.
 
-### Teste de ação no `bella-nina` (feito)
+### Teste de ação no `bella-beauty` (feito)
 
 Confirmei pela CLI as 5 primeiras regras da fila (`995e23`, `ce19f7`, `3fa603`, `17cba1`, `f877e9`, nota "phase 11.6 action test"). Antes e depois, com `rastro health --json`:
 
@@ -227,7 +227,7 @@ Leituras:
 
 **Construído:** `rastro health` (texto, `--format markdown`, `--json`, `--explain`, `--zones`, `--queue`, `--history`) sobre `rastro_db.health.build_report`, só SQL, sem modelo, sem nota composta, sem nada por pessoa; instantâneos diários com comparação só entre definições e janelas iguais; migrações `0012` a `0015`.
 
-**Verificado com dados reais (`bella-nina`):** todas as figuras contra SQL à mão (11.1 a 11.4), C1/C2 ponta a ponta, R5 num ciclo completo, e o teste de ação (5 confirmações subiram R3 de 3 para 8 de 27).
+**Verificado com dados reais (`bella-beauty`):** todas as figuras contra SQL à mão (11.1 a 11.4), C1/C2 ponta a ponta, R5 num ciclo completo, e o teste de ação (5 confirmações subiram R3 de 3 para 8 de 27).
 
 **Por fazer (não foi medido, fica aberto):**
 - **Teste de leitura** com alguém que não conhece o projeto: o relatório Markdown real está pronto, falta a resposta da pessoa. Sem ela, o critério "a resposta é uma linha da fila ou das zonas" não está confirmado.

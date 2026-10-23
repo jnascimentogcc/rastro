@@ -145,7 +145,7 @@ This starts PostgreSQL (with pgvector), runs the migrations, and starts the API 
 Put your reverse proxy in front of port 8000 and expose at least `/webhooks/github` and `/v1/*`.
 
 For a shared Linux server behind an existing Caddy, with backups, use `deploy/install.sh` instead; see
-[docs/deploy-hetzner.md](docs/deploy-hetzner.md).
+[docs/deploy-server.md](docs/deploy-server.md).
 
 ### 2.4 Install the App on a repository
 

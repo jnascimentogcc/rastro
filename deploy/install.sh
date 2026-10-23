@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# First install (and safe re-run) of Rastro on the shared server. Idempotent.
+# First install (and safe re-run) of Rastro on a Linux server that already runs a Caddy. Idempotent.
 #
 #   1. creates the external `proxy` network if missing, and .env from deploy/env.prod.example;
 #   2. generates the secrets that are empty (never replaces existing ones);
@@ -57,7 +57,7 @@ generate_if_empty POSTGRES_PASSWORD "openssl rand -hex 24"
 generate_if_empty EXCERPTS_ENCRYPTION_KEYS "openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n'"   # Fernet: 32 bytes, url-safe base64
 generate_if_empty GITHUB_WEBHOOK_SECRET "openssl rand -hex 32"
 
-DOMAIN="$(value RASTRO_DOMAIN)"; DOMAIN="${DOMAIN:-rastro.karpaai.com}"
+DOMAIN="$(value RASTRO_DOMAIN)"
 MISSING=()
 for key in GITHUB_APP_ID OPENAI_API_KEY LLM_MODEL EMBEDDING_MODEL; do
   [ -n "$(value "$key")" ] || MISSING+=("$key")
@@ -95,9 +95,13 @@ done
 [ "$ok" = 1 ] || { "${COMPOSE[@]}" logs --tail 40 migrate api worker; fail "the stack did not become healthy (logs above)."; }
 
 step "Public URL"
-code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$DOMAIN/health" 2>&1 || true)"
-if [ "$code" = 200 ]; then echo "    https://$DOMAIN/health -> 200"
-else warn "https://$DOMAIN/health -> ${code:-no answer}. Check DNS and the Caddy block (docker logs azmt-caddy --tail 30)."; fi
+if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "rastro.example.com" ]; then
+  warn "RASTRO_DOMAIN is not set to your domain in .env: skipping the public URL check."
+else
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$DOMAIN/health" 2>&1 || true)"
+  if [ "$code" = 200 ]; then echo "    https://$DOMAIN/health -> 200"
+  else warn "https://$DOMAIN/health -> ${code:-no answer}. Check DNS and the Caddy block (docker logs <your-caddy-container> --tail 30)."; fi
+fi
 
 step "Daily backup (03:30)"
 chmod +x deploy/*.sh 2>/dev/null || true
@@ -110,4 +114,4 @@ if [ "${#NEW[@]}" -gt 0 ]; then
   echo "    Secrets generated now: ${NEW[*]}"
   echo "    KEEP A COPY of EXCERPTS_ENCRYPTION_KEYS outside the server:  grep '^EXCERPTS_ENCRYPTION_KEYS=' $ENV_FILE"
 fi
-echo "    Next: issue a repository token (docs/deploy-hetzner.md)."
+echo "    Next: issue a repository token (docs/deploy-server.md)."
