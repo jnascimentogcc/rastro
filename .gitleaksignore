@@ -1,0 +1,4 @@
+# Fake values used by tests of the secret redactor and a test proposal key; not credentials.
+d02a8c04b3b2de667d018e7500fba19824f9b91d:packages/session_parsers/tests/test_redaction.py:aws-access-token:61
+84b8a9edc381705e799e71793487888e89e1ac35:packages/session_parsers/tests/test_redaction.py:aws-access-token:9
+57479f0132525ce7640aae1fdbe035893077241e:apps/api/tests/test_review_webhook.py:generic-api-key:15
