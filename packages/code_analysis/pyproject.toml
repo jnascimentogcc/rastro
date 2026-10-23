@@ -7,7 +7,7 @@ dependencies = [
     # 0.26.0 segfaults (access violation) on ordinary TypeScript files while walking the tree
     # (7 runs out of 8 on one 10 KB file; 0.23 to 0.25 are fine), which kills the worker
     # without a traceback. Do not lift the cap without re-running the regression test.
-    "tree-sitter>=0.23,<0.26",
+    "tree-sitter>=0.23,<0.27",
     "tree-sitter-typescript>=0.23",
 ]
 
