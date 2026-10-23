@@ -7,7 +7,7 @@
 #   4. builds and starts the stack, waits until healthy and tests the public URL;
 #   5. schedules the daily backup.
 #
-#   git clone https://github.com/myllmi/rastro.git /opt/rastro && cd /opt/rastro && git checkout develop
+#   git clone https://github.com/jnascimentogcc/rastro.git /opt/rastro && cd /opt/rastro && git checkout develop
 #   bash deploy/install.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."

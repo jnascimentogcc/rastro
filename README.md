@@ -1,381 +1,103 @@
 # Rastro
 
-Rastro preserves the *why* behind AI-generated code: it captures developer intent from coding-agent sessions, extracts business rules, anchors them to code, and warns on pull requests when a change may break one. See [docs/spec-rastro-mvp.md](docs/spec-rastro-mvp.md) for the full MVP spec.
+**Rastro keeps the *why* behind AI-generated code.**
 
-**To install and use Rastro, read [INSTALLATION.md](INSTALLATION.md)** (the CLI for developers, the server and the GitHub App for the operator). The rest of this file is for people working on the code and for reference.
+When a coding agent writes the code, the reason for a business rule ("implants are never booked on Friday
+afternoons, because the surgeon is away") lives in a chat that nobody reads again. A few weeks later someone, or
+another agent, "simplifies" the code and the rule silently disappears. Rastro captures that intent at commit time,
+turns it into rules anchored to the code, and brings it back when it matters: on the pull request that is about to
+break a rule, and in front of the agent before it edits a file.
 
-## Status
+## What it does
 
-Phases 1 to 11 of the spec are built: capture, static analysis, GitHub App, rule extraction, anchor resync, pull request
-impact analysis, rules query, human validation, rules for the agent and the health report. MVP scope: TypeScript and
-JavaScript, Claude Code, GitHub, no web UI. Production deployment is decided later; the three packages are published on PyPI (see Releasing the packages).
+1. **Captures** the part of your Claude Code conversation that produced each commit (a git `post-commit` hook;
+   secrets are removed on your machine before anything is sent, and it never blocks or fails a commit).
+2. **Extracts rules** when a pull request is merged: a statement, the reason (only if the conversation actually
+   gave one, never invented), and the functions it applies to. People confirm, correct or reject them.
+3. **Warns on pull requests** with one comment, edited in place, that says which recorded rule a change may break
+   and proposes the rules the PR itself introduces, ready to confirm with a tick or `/rastro ok`.
+4. **Tells the agent** which rules exist for a file before it reads or edits it (a hook and a read-only MCP
+   server), so it can ask you first.
+5. **Reports its own health** (`rastro health`): how much of the knowledge is recorded, explained and confirmed.
 
-## Development
+## Using it
 
-Requirements: [uv](https://docs.astral.sh/uv/) and Docker.
+Once the CLI is connected to a repository (see [Installation](#installation)):
 
 ```bash
-uv sync --all-packages        # install every workspace package
-cp .env.example .env          # optional; defaults match docker-compose.yml
-docker compose up -d --wait   # PostgreSQL 16 + pgvector
-(cd packages/db && uv run alembic upgrade head)
-PROCRASTINATE_APP=rastro_worker.app.app uv run procrastinate schema --apply
+rastro rules                                 # active rules of this repository, with the reason behind each
+rastro rules --file src/agenda.ts            # rules anchored in a file or folder
+rastro rules --search "can implants be booked on fridays"    # semantic search
+rastro rule 4f3e2d1c                         # one rule: its code, its history and who confirmed it
 ```
 
-Run the services:
+Review what was extracted:
 
 ```bash
-uv run uvicorn rastro_api.main:app --reload
-PROCRASTINATE_APP=rastro_worker.app.app uv run procrastinate worker
-```
-
-Capture a session for a commit. To try it without the GitHub App creating the repository (see the App setup
-below), issue a repository token by hand and point the CLI at the API:
-
-```bash
-uv run python -m rastro_api.admin issue-token --github-id 1 --full-name owner/repo   # prints the token once
-cd /path/to/your/repo
-rastro init --api-url http://localhost:8000     # prompts for the token, installs the post-commit hook
-git commit ...                                  # the hook runs `rastro capture`, which returns immediately
-rastro flush                                    # resend captures that could not be uploaded
-```
-
-The token goes to the system keychain (or `RASTRO_TOKEN` on headless machines), never to `.rastro/config.json`.
-Captures wait in `.rastro/pending/` (git-ignored through `.git/info/exclude`) until the upload succeeds;
-failures are logged to `.rastro/capture.log`, and so is a commit for which a session file exists but nothing was captured
-(with the time window and the reason). Edits made through Claude Code's Edit/Write/MultiEdit tools are recognised, as are Bash
-commands that write a changed file (`sed -i`, `tee`, `>`, `mv`, `git apply`, scripts calling `write_text`...); the command text is never uploaded.
-
-A commit's session window starts at its parent's commit time, but never later than the last commit already captured
-(`.rastro/captured.json`, at most 24 h back), so a squash-merge commit created by GitHub after the conversation does not hide it.
-If a wider window (24 h) would have captured something the automatic one missed, `capture.log` says so and prints the recovery command:
-
-```bash
-rastro capture --sha <sha> --since 2026-10-05T11:30    # recapture with an explicit window start and upload (idempotent)
-```
-
-Checks (the same ones CI runs):
-
-```bash
-uv run ruff check . && uv run ruff format --check .
-uv run mypy apps packages
-uv run pytest                              # all tests; DB tests need the compose Postgres
-uv run pytest apps/api/tests/test_health.py::test_health   # a single test
-uv run pytest -m "not db"                  # skip tests that need PostgreSQL
-```
-
-Create a migration after changing `packages/db/src/rastro_db/models.py`:
-
-```bash
-cd packages/db && uv run alembic revision --autogenerate -m "describe change"
-```
-
-Review the generated file: Alembic does not detect everything (for example `CREATE EXTENSION`).
-
-## Running with Docker
-
-The compose file runs the whole stack (`postgres` with pgvector, a one-shot `migrate` service that applies Alembic and
-the Procrastinate schema, `api` and `worker`; non-root multi-stage uv images). The step-by-step is in
-[INSTALLATION.md](INSTALLATION.md#23-start-the-stack). `DATABASE_URL` and the private-key path are set by compose;
-everything else comes from `.env`. Host ports: `POSTGRES_PORT` and `API_PORT` (5432 and 8000).
-
-## Releasing the packages
-
-Three distributions are published, in this order because each depends on the previous one:
-`rastro-session-parsers`, `rastro-cli` (the command is still `rastro`) and `rastro-mcp` (the read-only MCP
-server). The version lives in each package's `pyproject.toml`; bump them together when an API between them
-changes and keep the `rastro-session-parsers` range in `packages/cli/pyproject.toml` and the `rastro-cli`
-range in `packages/mcp/pyproject.toml` in sync. The license is MIT (`LICENSE` at the root and in each
-package). The distribution
-is called `rastro-cli` because `rastro` is already taken on PyPI by another project; the three names were free
-when checked (2026-10-21), so confirm they still are right before the first upload. The product name is
-provisional (spec), so renaming later only changes the distribution names: keep the `rastro` script or update
-the hook text in `rastro_cli/hook.py` too. A published version can never be replaced, so rehearse on TestPyPI.
-
-```bash
-rm -rf dist
-uv build --package rastro-session-parsers -o dist
-uv build --package rastro-cli -o dist
-uv build --package rastro-mcp -o dist
-uvx twine check dist/*
-# smoke test in a throwaway tool dir, resolving the sibling wheel from dist/ (add --no-cache --reinstall if
-# a version was built before with different content: uv caches wheels by version)
-UV_TOOL_DIR=$(mktemp -d) UV_TOOL_BIN_DIR=$(mktemp -d) uv tool install --find-links dist ./dist/rastro_cli-<version>-py3-none-any.whl
-# publish (maintainers only; the token comes from the environment, never from a file in the repository):
-export UV_PUBLISH_TOKEN=...        # a TestPyPI token for a rehearsal, a PyPI token for the real thing
-uv publish --publish-url https://test.pypi.org/legacy/ dist/rastro_session_parsers-*   # rehearsal; drop --publish-url for PyPI
-uv publish --publish-url https://test.pypi.org/legacy/ dist/rastro_cli-*
-uv publish --publish-url https://test.pypi.org/legacy/ dist/rastro_mcp-*
-```
-
-Users then run `pipx install rastro-cli` or `uvx --from rastro-cli rastro init` (`uvx` needs `--from`
-because the package and the command have different names). From TestPyPI the dependencies live on PyPI, so
-add `--extra-index-url https://pypi.org/simple/` (`pipx install --index-url https://test.pypi.org/simple/
---pip-args="--extra-index-url https://pypi.org/simple/" rastro-cli`). The git hook calls `rastro` by name, so the
-tool's bin directory must be on the `PATH` git sees (`pipx ensurepath` / `uv tool update-shell`);
-`rastro init` warns when it is not.
-
-## GitHub App (phase 4)
-
-Creating and installing the App is described in [INSTALLATION.md](INSTALLATION.md#22-create-the-github-app). For
-local development run the services with the same environment:
-
-```bash
-uv run --env-file .env python -m rastro_api --reload   # selects a Windows-safe event loop
-PROCRASTINATE_APP=rastro_worker.app.app uv run --env-file .env procrastinate worker
-```
-
-Webhooks: `ping`, `installation`, `installation_repositories`, `push` and `pull_request` are
-handled. Each delivery id (`X-GitHub-Delivery`) is stored in `webhook_deliveries`; a replay is
-answered `202` with `"duplicate": true` and does nothing (a delivery whose processing failed is
-not remembered, so GitHub's redelivery works).
-
-### App lifecycle and data retention
-
-| GitHub event | Repository `status` |
-| --- | --- |
-| `installation` created / `installation_repositories` added | `active` (initial index queued) |
-| `installation` suspend | `suspended` |
-| `installation` unsuspend | `active` (re-index queued: pushes were missed) |
-| `installation` deleted / `installation_repositories` removed | `uninstalled` |
-
-A repository that is not `active` is not analysed: push and pull request webhooks are ignored,
-queued jobs return immediately, and `POST /v1/sessions` answers `403` (the CLI keeps the capture
-pending). **Retention choice: nothing is deleted.** Rules, symbols, sessions and analyses are
-kept so a reinstall picks up where it left off, and `rastro rules` keeps working with the repo
-token. Remove a repository's data manually (delete the `repositories` row and its dependents) if
-a customer asks for erasure.
-
-GitHub truncates recursive trees of very large repositories (100,000 entries / 7 MB); the client
-detects `truncated` and walks the tree one directory per request instead.
-
-## Security: excerpts at rest and secret redaction
-
-`agent_sessions.excerpts` (pieces of private conversations) is encrypted by the application with
-Fernet before it reaches PostgreSQL. The column stays `jsonb`: an encrypted value is
-`{"v": 1, "ct": "..."}`, a plain list is a legacy row and is still readable, and the ORM always
-hands readers a list of dicts. Keys come from `EXCERPTS_ENCRYPTION_KEYS` (comma separated, the
-first encrypts, all decrypt). Without a key the API logs a warning and stores plaintext, which is
-only acceptable for local development. Reading encrypted data with a missing or wrong key raises
-`DecryptionError`.
-
-```bash
-uv run python -m rastro_db.crypto generate-key      # a new key
-uv run python -m rastro_db.crypto reencrypt         # encrypt plaintext rows / move rows to the primary key
-```
-
-Rotation: prepend the new key (`new,old`), deploy, run `reencrypt`, then drop the old key.
-Migration `0006` encrypts existing rows when a key is set while migrating.
-
-Before leaving the developer machine, text is scrubbed by `rastro_session_parsers.redact`: our
-own patterns plus the `detect-secrets` detectors (cloud, VCS, payment and messaging providers).
-
-## Reliability and cost control
-
-Jobs are retried with exponential backoff (30 s, 1 min, 2 min... capped at 30 min, 5 retries)
-only for transient failures: GitHub 5xx, 429 and rate limits (honouring `Retry-After`), network
-errors, model rate limits/timeouts/5xx and lost database connections. Permanent errors (GitHub
-401/403/404/422, model refusals, bad payloads) fail at once. Every decision is logged by
-`rastro_worker.retry` (`retry 2/5 in 60s` / `giving up` / `failed permanently`).
-
-`LLM_MONTHLY_TOKEN_BUDGET` caps the tokens (input + output, embeddings included) one repository
-may use per calendar month (UTC), summed from `llm_calls`. It is checked before a job starts:
-rule extraction marks the commit `skipped_budget` (re-run `rule_extraction` with `force` once
-there is budget), impact analysis returns `skipped_budget` without commenting, and `rastro rules
---search` falls back to text search. A job already running can overshoot by what it spends itself.
-Unset or `0` means unlimited.
-
-If the OpenAI account runs out of credit the jobs do not retry (it cannot help): the affected commits
-get the status `skipped_quota` and the worker logs an error. After topping up, run
-`uv run --env-file .env python -m rastro_worker.requeue` to analyse them (it also re-queues
-`skipped_budget` commits; `--status` and `--repository-id` narrow it). A pull request analysed while
-the balance was empty gets no comment at all, so push to it again once credit is back.
-
-## Rule extraction (phase 5)
-
-Rules describe the default branch. Extraction runs only for commits that are on it: a commit with
-a session pushed to a feature branch is marked `awaiting_merge`, and the push that merges it (a merge
-commit pushes the PR's commits again) releases it. This way a pull request is analysed against the
-rules as they were before it, and a PR that is never merged never changes them. Squash and rebase
-merges create new commit SHAs without a session, so merging a pull request (any kind) also lists the
-PR's own commits through the GitHub API, marks them as default-branch commits and extracts rules from
-each one's own diff, oldest first (later commits see and may update the rules of earlier ones).
-
-For every commit with a captured session, the worker's `rule_extraction` job sends the diff, the
-user requests, the changed symbols and the rules already anchored to them to the model, validates
-the answer and stores rules, origins and anchors (plus exact/embedding duplicates). Set
-`OPENAI_API_KEY`, `LLM_MODEL` and `EMBEDDING_MODEL` in `.env` (embeddings must support the
-`dimensions` parameter; the database uses 1024). Without them the job is skipped.
-
-Measure quality against the planted rules of `fixtures/clinica-demo` (needs the compose Postgres):
-
-```bash
-uv run --env-file .env python -m rastro_worker.evaluate fixtures/clinica-demo            # real model
-uv run --env-file .env python -m rastro_worker.evaluate fixtures/clinica-demo --oracle   # harness check, no model
-uv run --env-file .env python -m rastro_worker.evaluate fixtures/clinica-demo --runs 3   # models vary between runs
-```
-
-`--verbose` prints every rule the model produced next to what was expected.
-
-Measured on `fixtures/clinica-demo` (3 runs each, `text-embedding-3-small`): `gpt-6-luna` 94% mean (worst
-91%, 1 false-positive commit in 2 of 3 runs), `gpt-6.1-sol` 100% in every run with no false positives and
-about half the output tokens. `gpt-6.1-sol` is the recommended `LLM_MODEL`.
-
-## Pull request impact analysis (phase 7)
-
-On `pull_request` events (`opened`, `synchronize`, `reopened`, `ready_for_review`) the API queues
-`analyze_pr`. The worker maps the PR onto the symbols it changes, picks the candidate rules
-(anchored to changed or deleted symbols, within two calls of them, or with unchanged copies), asks
-the model whether the change can break or change each one, and posts **one** comment that it edits
-in place on every push (and turns into an "all clear" if the warning no longer applies). Only
-findings above `IMPACT_THRESHOLD` (default 0.7) are reported, and a finding needs a real change of
-behaviour plus a concrete counterexample from the model; renames and moves are left to the anchor
-resync. `IMPACT_COMMENT_LANGUAGE` is `en` or `pt`; `IMPACT_MAX_CANDIDATES` caps model calls per PR.
-The GitHub App needs *Pull requests: read and write* (already in the setup above).
-
-`fixtures/clinica-demo/prs/` holds five pull requests (two that must warn, three that must not)
-that the evaluation runs after the commits; the criterion is fewer than 1 irrelevant comment per 5
-PRs. `--runs 3` reports it per run.
-
-## Querying the rules (phase 8)
-
-```bash
-rastro rules                                   # active rules of this repository, with the reason behind each
-rastro rules --file src/agenda.ts              # rules anchored in a file (or a folder); path relative to where you are
-rastro rules --search "can implants be booked on fridays"   # semantic search; plain text match without an embedding model
-rastro rules --status orphaned                 # active (default), orphaned, superseded or all
-rastro rules --limit 50 --json                 # raw server response
-rastro rule 4f3e2d1c                           # one rule: code anchors (primary/duplicate), review state and the commits behind it
-```
-
-## Validating rules (phase 9.1)
-
-A human can say whether a rule is right. This is a separate fact from the model's confidence.
-
-```bash
-rastro rules --unvalidated                     # rules nobody has confirmed yet
-rastro rules --rejected                        # rules a reviewer rejected
-rastro rule 4f3e2d1c --confirm                 # "this is right as written"
-rastro rule 4f3e2d1c --correct "New statement" --why "Because ..."   # rewrite it (and optionally give the reason)
-rastro rule 4f3e2d1c --why "Because ..."       # only add the reason the conversation never gave
+rastro rules --unvalidated                   # rules nobody has confirmed yet
+rastro rule 4f3e2d1c --confirm               # "this is right as written"
+rastro rule 4f3e2d1c --correct "New statement" --why "Because ..."
+rastro rule 4f3e2d1c --why "Because ..."     # add the reason the conversation never gave
 rastro rule 4f3e2d1c --reject --note "not a real rule"
 ```
 
-A confirmation holds for one *revision* of the rule: when an extraction or a correction changes its
-statement or reason, the revision rises and the rule is unvalidated again. A rejected rule stays in
-the database (with its embedding and anchors) so that extraction does not propose it again (a reworded version is recognised; the same wording
-with another number, such as 60 instead of 90 days, is a new rule; numbers written as words are not
-compared); it is
-excluded from searches, impact analysis and the default list. The reviewer is the `git config
-user.email` and is recorded as **not verified**: anyone holding the repository token could write
-another name. Verified identities arrive with the GitHub flow (phase 9.3).
+On a pull request, write `/rastro ok <id>`, `/rastro reject <id>`, `/rastro correct <id>: <text>` or
+`/rastro why <id> <reason>` in a comment (or tick the box next to a proposal). Only people with write access to the
+repository are heard.
 
-### Reviewing the proposals from GitHub (phase 9.3)
-
-Each proposal in the PR comment has a checkbox and a short id. Anyone with **write access** to the
-repository (checked against GitHub on every action; everybody else is ignored in silence) can:
-
-- tick the box to **confirm** it (untick to take it back);
-- `/rastro ok <id>`: same as the box (use it if the box does not reach Rastro, see below);
-- `/rastro reject <id>`: it is struck through and will not be proposed again;
-- `/rastro correct <id>: <new statement>`: replaces the text and counts as confirmed;
-- `/rastro why <id> <reason>`: adds the reason the conversation never gave (marked as written by you).
-
-The id is the first 4 or more characters shown next to the proposal; a wrong or ambiguous one gets a
-short answer. Reviewer text is capped at 500 characters, never sent to a model and escaped when shown
-again. Reviews change only the proposals and re-render the comment without calling the model; nothing
-reaches `rules` until phase 9.4 applies them at merge. The reviewer is the verified GitHub login of the
-event, unlike the CLI. **Not yet verified against a real App:** that ticking a box in a bot comment
-arrives as an `issue_comment` `edited` event with the right `sender`; if it does not, use `/rastro ok`.
-
-### What happens at merge (phase 9.4)
-
-When the PR is merged, each commit that was previewed lands **exactly as the reviewers saw it**,
-without calling the model again: unreviewed proposals become ordinary (unvalidated) rules; confirmed
-and corrected ones become rules validated by the GitHub login that reviewed them (with a
-`rule_reviews` entry, source `github`); a reason written by a person is kept as theirs; a rejected
-proposal is stored as a `rejected` rule so it is never proposed again, and a rejected *change* to an
-existing rule simply leaves that rule alone. A commit that was never previewed (or whose session
-arrived after the preview) is extracted the usual way. If the model account has no credit at merge
-time the reviews wait, intact, for `python -m rastro_worker.requeue`.
-
-### Rule preview in the pull request (phase 9.2)
-
-The single PR comment gets a second section, "rules this PR proposes", read from the sessions of the
-PR's commits **before** the merge. Nothing is stored in `rules` until the PR is merged; if it never
-is, the knowledge base is untouched. Each commit is previewed once (a push only pays for new
-commits), at most 5 proposals are shown (the rest are collapsed), and when the monthly token budget
-is spent or the model account has no credit the comment says the preview is unavailable instead of
-staying silent. It is shown in public repositories as well, and it shows the reason (never the
-original quote), so mind that when the conversations behind a public repository are private. Spec:
-`docs/spec-fase-9-validacao-humana.md`.
-
-A rule whose conversation never said why shows "unknown origin" instead of a guessed reason.
-The server exposes the same data at `GET /v1/repos/{id}/rules` (filters `file`, `status`, `q`,
-`limit`, `offset`) and `GET /v1/repos/{id}/rules/{rule_id}`, authenticated with the repository
-token. Semantic search embeds the query with the configured `EMBEDDING_MODEL` and keeps matches
-above 0.3 cosine similarity; if the server has no embedding model, or the call fails, it falls
-back to a case-insensitive text match on the statement and the reason.
-
-## Rules for the agent before it edits (phase 10)
-
-Built and evaluated (`docs/rastro-resultados-fase10.md`). The hook and the MCP make the agent tell the user
-that a recorded rule changes; they do not by themselves make it stop before editing, which in the evaluation came
-from project instructions asking to confirm.
+Let the agent see the rules before it edits:
 
 ```bash
-rastro agent install            # hooks in .claude/settings.local.json (not committed) + first download of the rules
-rastro agent install --shared   # .claude/settings.json for the whole team; needs `rastro-hook` on their PATH
-rastro agent install --no-mcp   # hooks only; by default a local install also adds the read-only MCP server (.mcp.json, not committed)
-rastro agent uninstall          # removes only what install added (hooks and the MCP entry; --no-mcp keeps the latter)
-rastro sync                     # refresh .rastro/cache/rules.json by hand
+rastro agent install            # hooks for Claude Code (local, not committed) + the read-only MCP server
+rastro agent uninstall
 ```
 
-`GET /v1/repos/{id}/rules/snapshot` returns every active rule with its active anchors (path and
-qualified name only, no quotes) and an `ETag` computed from the content, so a conditional request is
-answered with 304 only when nothing the agent would see has changed. The hook reads the cached copy,
-never the network: a `Read` of a file with rules gets them as `additionalContext`; an `Edit`/`Write`
-of a file not yet shown to that session or subagent is denied once with the same text. At session
-start it refreshes a stale cache in the background and tells the model how many rules exist; after
-`/clear` or a compaction everything is announced again. Every announcement is noted (file, rule ids,
-no text) in `.rastro/consulted.jsonl`, and the next `rastro capture` of that session uploads those
-lines with it (`agent_sessions.consulted`), the raw data of the coverage figure of `rastro health`: of the files with
-rules that a session edited, how many had been announced first. The hook is standard library only and exits 0 on any problem, so
-it can never block the agent.
-
-The `rastro-mcp` server (stdio, `packages/mcp`) answers on request, for agents that want to look something
-up rather than wait for a file read: `rastro_rules_for_file(path, symbol?)`, `rastro_search_rules(query, limit?)`
-and `rastro_get_rule(rule_id)`. All three only read and are marked `readOnlyHint`, so allowing `mcp__rastro`
-in `permissions.allow` is safe. It never exposes the original conversation quotes. See `docs/spec-fase-10-consulta-agente.md` and
-`docs/rastro-resultados-fase10.md`.
-
-## Health report (phase 11)
+Look at the state of the knowledge base:
 
 ```bash
-rastro health                  # how much of the knowledge is recorded, explained and confirmed
-rastro health --zones          # per directory: symbols, symbols with a rule, rules, confirmed, no reason
-rastro health --queue 10       # what to confirm first (0 hides it)
-rastro health --history        # the daily snapshots, most recent first
-rastro health --format markdown --zones   # tables to paste into a PR or wiki
-rastro health --explain        # how each figure is computed, where it comes from, what it does not prove
-rastro health --window 60d --exclude "src/legacy/*" --json
+rastro health                   # recorded, explained and confirmed, with numerator and denominator
+rastro health --zones --queue 10    # per directory, and what to confirm first
+rastro health --history         # how it changed day by day
 ```
 
-Built (steps 11.1 to 11.6). The report covers the knowledge base (rules by status, with a known reason, confirmed
-by a person, confirmations verified by GitHub, by someone other than the PR author, outdated by an edit or by a
-change in the code, age of what nobody confirmed), the process (proposals reviewed before the merge or integrated
-without review, verdicts on the extraction), agent use (files with rules announced by the hook before the first edit,
-sessions where the hook ran), code integrated with no recorded session, zones (directories) and a review queue. It
-warns when commits were not analysed (failures, budget, quota) because the figures may then be out of date.
+Every figure in the report shows what it is out of, says `n/a` with the reason when it cannot be known, and says
+nothing about individual people. See [docs/reference.md](docs/reference.md) for how each part works.
 
-Rules of the report: every figure shows its numerator and denominator; what cannot be known is `n/a` with the
-reason, never 0%; fewer than 10 cases are flagged as a small sample; time to first review and verdicts are withheld
-with fewer than three reviewers so they cannot point at a person; there is no composite score, no model call and
-nothing about individual people. A confirmed rule that only lacks a reason shows up in the queue with a `--why`
-command. The worker stores the figures once a day (03:00, active repositories, no rule text) and the report says what
-a figure was in the oldest comparable snapshot of the window (same definitions and window); `--history` lists the days.
-Snapshots start the day the worker first runs, so a trend needs the worker running for a while.
+## Installation
 
-Still open from the evaluation (`docs/rastro-resultados-fase11.md`, section 7): the reading test with someone who
-does not know the project, live figures for "other than the PR author" and the process timings (they need a real PR
-review by at least three people), and tuning of the limits. Spec: `docs/spec-fase-11-rastro-health.md`.
+Rastro has two parts, installed by two different people:
+
+- **The CLI** (`rastro-cli`, on PyPI), for every developer: `pipx install rastro-cli` or
+  `uv tool install rastro-cli`.
+- **The server** (API, worker and PostgreSQL with pgvector, plus a GitHub App), for one person per team, with
+  Docker Compose.
+
+The step-by-step, for both, is in **[INSTALLATION.md](INSTALLATION.md)**.
+
+## What it needs and what it does not do
+
+- Languages: **TypeScript and JavaScript** (the code is analysed with tree-sitter).
+- Coding agent: **Claude Code**. Source hosting: **GitHub**.
+- The server needs an **OpenAI** API key for extraction, impact analysis and embeddings; without one those jobs are
+  skipped. Model access goes through one interface (`packages/llm`), so other providers can be added.
+- There is no web interface: you use the CLI and the pull request comments.
+- The conversation excerpts that Rastro stores are encrypted at rest when you set `EXCERPTS_ENCRYPTION_KEYS`, and
+  the original quotes are never shown to other people or to the agent. See [SECURITY.md](SECURITY.md).
+
+## Status
+
+Early (alpha). The capture, the GitHub App, rule extraction, pull request analysis, human review, the agent hooks
+and the health report are built and tested, and evaluated on one real repository and on a demonstration project
+(`fixtures/clinica-demo`). Results of each stage are in [docs/](docs/). Expect rough edges and breaking changes.
+
+## Documentation
+
+- [INSTALLATION.md](INSTALLATION.md): install the CLI and the server.
+- [docs/reference.md](docs/reference.md): how the server and the CLI behave, part by part.
+- [docs/spec-rastro-mvp.md](docs/spec-rastro-mvp.md) and the other specs and evaluation results in [docs/](docs/)
+  (some are in Portuguese).
+- [CONTRIBUTING.md](CONTRIBUTING.md): working on the code.
+
+## License
+
+[MIT](LICENSE).

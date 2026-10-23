@@ -104,7 +104,7 @@ pipx uninstall rastro-cli    # or: uv tool uninstall rastro-cli
 ### 2.1 Get the code and configure
 
 ```bash
-git clone https://github.com/myllmi/rastro.git && cd rastro
+git clone https://github.com/jnascimentogcc/rastro.git && cd rastro
 cp .env.example .env
 mkdir -p secrets
 ```
