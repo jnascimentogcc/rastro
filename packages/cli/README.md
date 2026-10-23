@@ -1,6 +1,6 @@
 # Rastro
 
-Command line for [Rastro](https://github.com/myllmi/rastro): captures the intent behind
+Command line for [Rastro](https://github.com/jnascimentogcc/rastro): captures the intent behind
 AI-generated commits from coding-agent sessions (Claude Code) and queries the business rules
 extracted from them.
 

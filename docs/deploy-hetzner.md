@@ -42,7 +42,7 @@ Create a new App, separate from the development one (which keeps its smee webhoo
 ## 3. Install
 
 ```bash
-git clone https://github.com/myllmi/rastro.git /opt/rastro && cd /opt/rastro && git checkout develop
+git clone https://github.com/jnascimentogcc/rastro.git /opt/rastro && cd /opt/rastro && git checkout develop
 bash deploy/install.sh        # first run creates .env, generates secrets, lists what is missing
 ```
 

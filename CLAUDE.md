@@ -14,7 +14,7 @@ Phases 1 (foundations), 2 (static analysis), 3 (capture), 4 (GitHub App) and 5 (
 
 ## Commands
 
-See [README.md](README.md) for setup. Key points:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and [docs/reference.md](docs/reference.md) for how each part behaves. Key points:
 
 ```bash
 uv sync --all-packages                       # plain `uv sync` only installs the root project
