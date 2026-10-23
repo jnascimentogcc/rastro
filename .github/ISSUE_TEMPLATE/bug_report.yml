@@ -1,0 +1,42 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Do not include secrets, tokens or private conversation text.**
+        For a security problem use the private report in the Security tab instead of an issue.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part?
+      options:
+        - CLI (rastro)
+        - Git hook / capture
+        - MCP server or agent hook
+        - Server (API / worker)
+        - GitHub App / pull request comment
+        - Documentation
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `pipx list` / `uv tool list`, or the commit of the server.
+      placeholder: rastro-cli 0.1.1
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: The exact command and its output, if any. `.rastro/capture.log` helps for capture problems.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: Windows 11, Python 3.12, Claude Code 2.x
