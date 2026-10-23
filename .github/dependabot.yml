@@ -5,6 +5,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # tree-sitter 0.26 segfaults while analysing ordinary TypeScript files; the cap in
+      # packages/code_analysis/pyproject.toml is deliberate and guarded by test_tree_sitter_pin.py.
+      - dependency-name: tree-sitter
+        versions: [">=0.26"]
     groups:
       python-dependencies:
         patterns: ["*"]
