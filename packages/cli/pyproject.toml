@@ -1,6 +1,6 @@
 [project]
 name = "rastro-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "Rastro command line: git hook capture of coding-agent sessions and rules query."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -36,3 +36,8 @@ packages = ["src/rastro_cli"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/rastro_cli", "README.md"]
+
+[project.urls]
+Homepage = "https://github.com/jnascimentogcc/rastro"
+Source = "https://github.com/jnascimentogcc/rastro"
+Issues = "https://github.com/jnascimentogcc/rastro/issues"

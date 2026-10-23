@@ -1998,7 +1998,7 @@ requires-dist = [
 
 [[package]]
 name = "rastro-cli"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/cli" }
 dependencies = [
     { name = "httpx" },
@@ -2085,7 +2085,7 @@ requires-dist = [
 
 [[package]]
 name = "rastro-mcp"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/mcp" }
 dependencies = [
     { name = "mcp" },
@@ -2100,7 +2100,7 @@ requires-dist = [
 
 [[package]]
 name = "rastro-session-parsers"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/session_parsers" }
 dependencies = [
     { name = "detect-secrets" },
