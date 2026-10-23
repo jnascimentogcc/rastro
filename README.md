@@ -85,8 +85,8 @@ Three distributions are published, in this order because each depends on the pre
 `rastro-session-parsers`, `rastro-cli` (the command is still `rastro`) and `rastro-mcp` (the read-only MCP
 server). The version lives in each package's `pyproject.toml`; bump them together when an API between them
 changes and keep the `rastro-session-parsers` range in `packages/cli/pyproject.toml` and the `rastro-cli`
-range in `packages/mcp/pyproject.toml` in sync. The license is proprietary (`LicenseRef-Proprietary`, with a
-`LICENSE` file in each package): the source is visible for installation and evaluation only. The distribution
+range in `packages/mcp/pyproject.toml` in sync. The license is MIT (`LICENSE` at the root and in each
+package). The distribution
 is called `rastro-cli` because `rastro` is already taken on PyPI by another project; the three names were free
 when checked (2026-10-21), so confirm they still are right before the first upload. The product name is
 provisional (spec), so renaming later only changes the distribution names: keep the `rastro` script or update

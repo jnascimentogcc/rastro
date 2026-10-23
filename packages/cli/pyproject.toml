@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Rastro command line: git hook capture of coding-agent sessions and rules query."
 readme = "README.md"
 requires-python = ">=3.12"
-license = "LicenseRef-Proprietary"
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Rastro maintainers" }]
 keywords = ["git", "ai", "claude-code", "business-rules", "code-review"]
