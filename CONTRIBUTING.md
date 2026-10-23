@@ -111,6 +111,12 @@ uv publish --publish-url https://test.pypi.org/legacy/ dist/rastro_cli-*
 uv publish --publish-url https://test.pypi.org/legacy/ dist/rastro_mcp-*
 ```
 
+After the real upload, tag the exact commit the packages were built from and create a pre-release on GitHub (one tag for the three packages while they share a version; use per-package tags if they ever diverge). The target must be the full commit SHA:
+
+```bash
+gh release create v<version> --target "$(git rev-parse HEAD)" --prerelease --title "v<version>" --notes-file <notes.md>
+```
+
 Users then run `pipx install rastro-cli` or `uvx --from rastro-cli rastro init` (`uvx` needs `--from`
 because the package and the command have different names). From TestPyPI the dependencies live on PyPI, so
 add `--extra-index-url https://pypi.org/simple/` (`pipx install --index-url https://test.pypi.org/simple/
