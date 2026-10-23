@@ -169,7 +169,7 @@ Fora desta fase: servidor MCP alojado na API (HTTP) para agentes na cloud; ferra
 - Instalador: funde com hooks existentes, `--remove` desfaz só o que pôs, idempotente.
 
 **Avaliação real** (manual, no estilo de `rastro-resultados-fase9.md`; não corre em CI)
-- Fixture `clinica-demo` e/ou `bella-nina`, com `claude -p` e as mesmas instruções com e sem a consulta.
+- Fixture `clinica-demo` e/ou `bella-beauty`, com `claude -p` e as mesmas instruções com e sem a consulta.
 - 10 pedidos que violam uma regra plantada, 10 que lhe tocam sem a violar, 10 que não lhe tocam.
 - Medir: o agente menciona a regra antes de editar? pede confirmação? edita mesmo assim? E nos neutros, menciona regras sem necessidade? (ruído)
 - Medir latência real do hook em Windows, macOS e Linux, e tokens acrescentados por sessão.

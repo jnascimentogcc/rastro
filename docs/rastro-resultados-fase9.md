@@ -1,7 +1,7 @@
 # Resultados do teste real da Fase 9 (validação humana)
 
 Teste de ponta a ponta da Fase 9 ([spec](spec-fase-9-validacao-humana.md)) contra uma GitHub App real,
-executado em 19 de outubro de 2026 no repositório de demonstração `jnascimentogcc/bella-nina`. É o
+executado em 19 de outubro de 2026 no repositório de demonstração `jnascimentogcc/bella-beauty`. É o
 primeiro teste da fase com uma App e um modelo reais: até aqui só tinha corrido contra simulações.
 Este relatório avalia; não deve servir, por si só, para alterar comportamento sem nova análise.
 
@@ -12,7 +12,7 @@ Este relatório avalia; não deve servir, por si só, para alterar comportamento
 | Código testado | `develop` no commit `d6edb63` (Fases 9.1 a 9.4 mergeadas). Durante o teste entraram as correções #29 (captura de edições por shell), #30 (um teste) e #31 (versão do tree-sitter) |
 | Ambiente | Rastro local em Docker (API, worker, Postgres), webhooks via smee, GitHub App de desenvolvimento |
 | Modelo | o configurado no `.env` de dev (extração, impacto e embeddings de 1024 dimensões) |
-| Repositório | `bella-nina` (TypeScript, gestão de salão), 25 regras de testes anteriores já na base |
+| Repositório | `bella-beauty` (TypeScript, gestão de salão), 25 regras de testes anteriores já na base |
 | Testador | um só (dono do repositório, acesso de administrador) |
 | Pedido A (PR #34) | regra **nova**: máximo de 2 remarcações por marcação. Integrado por **squash** |
 | Pedido B (PR #35) | **altera** uma regra existente: pré-pagamento a partir de 2 faltas consecutivas (antes 3). **Merge commit** |
@@ -186,7 +186,7 @@ regra rejeitada não volta quando é reformulada, com os mesmos números e símb
 4. Mais de 5 propostas na mesma PR (bloco recolhível), vários commits que alteram o mesmo símbolo (a última
    proposta substitui as anteriores), force-push de commits, comentário apagado, ids ambíguos.
 5. Comentários em português (`IMPACT_COMMENT_LANGUAGE=pt`): o teste correu com os textos em inglês.
-6. Repositório público e produção (Hetzner): nada disto foi exercitado. O PROD ainda corre código anterior;
+6. Repositório público e produção: nada disto foi exercitado. O PROD ainda corre código anterior;
    o deploy aplica as migrações 0008 a 0010, traz a correção do tree-sitter, e a App `rastro-prod` precisa de
    subscrever o evento *Issue comment*.
 7. Mais de uma pessoa a rever a mesma proposta, e carga real (PRs com muitos commits e custo por PR).

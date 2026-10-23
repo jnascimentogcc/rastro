@@ -4,7 +4,7 @@
 >
 > Escrito a partir do estado do repositório em 21/10/2026 (migrações até `0011`, `agent_sessions.consulted` já preenchido e por ler).
 >
-> **Revisão de 21/10/2026.** Os pressupostos da primeira versão foram confrontados com o código e com a base de desenvolvimento do `bella-nina`. Quatro definições não funcionavam com os dados reais e foram corrigidas: R3a (a marca de autor nunca é falsa), V1 (daria 0%), a cobertura (perdia sessões com vários commits) e P5 (o veredicto desaparece quando a proposta passa a `applied`). As secções afetadas dizem o que mudou e porquê; a secção 12 regista as decisões sobre as questões que estavam em aberto.
+> **Revisão de 21/10/2026.** Os pressupostos da primeira versão foram confrontados com o código e com a base de desenvolvimento do `bella-beauty`. Quatro definições não funcionavam com os dados reais e foram corrigidas: R3a (a marca de autor nunca é falsa), V1 (daria 0%), a cobertura (perdia sessões com vários commits) e P5 (o veredicto desaparece quando a proposta passa a `applied`). As secções afetadas dizem o que mudou e porquê; a secção 12 regista as decisões sobre as questões que estavam em aberto.
 
 ## 1. Porquê
 
@@ -17,9 +17,9 @@ Dois princípios guiam o desenho:
 
 ## 2. Critérios de sucesso
 
-- `rastro health` responde em menos de 2 s (p95) num repositório do tamanho do `bella-nina` e num conjunto sintético de 50 mil linhas e 5 000 regras. Só SQL; **zero chamadas ao LLM** (teste automático).
+- `rastro health` responde em menos de 2 s (p95) num repositório do tamanho do `bella-beauty` e num conjunto sintético de 50 mil linhas e 5 000 regras. Só SQL; **zero chamadas ao LLM** (teste automático).
 - Cada número é rastreável: `rastro health --explain` mostra fórmula, fonte e limitações. Cada métrica tem teste com dados feitos à mão.
-- Verificação no `bella-nina` real: os contadores coincidem com a contagem manual por SQL, e agir muda os números (validar 5 regras sobe "validadas" em 5 e encurta a fila).
+- Verificação no `bella-beauty` real: os contadores coincidem com a contagem manual por SQL, e agir muda os números (validar 5 regras sobe "validadas" em 5 e encurta a fila).
 - Dado em falta aparece como **n/a, com o motivo**, nunca como 0% (D4).
 - Depois de dois instantâneos, a tendência aparece (D7).
 - Uma pessoa sem contexto consegue, só com o relatório em Markdown, dizer o que valeria a pena fazer a seguir.
@@ -224,11 +224,11 @@ Fora do âmbito de propósito: `--fail-under` ou qualquer bloqueio em CI. Um lim
 - Desempenho: o conjunto sintético de 5 000 regras e 50 mil linhas dentro do orçamento.
 
 **Avaliação real** (estilo de `rastro-resultados-fase10.md`)
-- No `bella-nina`: comparar cada contador com SQL escrito à mão.
+- No `bella-beauty`: comparar cada contador com SQL escrito à mão.
 - Teste de ação: validar 5 regras da fila e confirmar que o número sobe em 5, a fila encurta e R3a distingue autor de outro revisor.
 - Teste de ultrapassagem pelo código: alterar o corpo de uma função âncora de uma regra validada e ver R5 passar a 1.
 - Teste de leitura: dar o relatório em Markdown a alguém que não conhece o projeto e perguntar o que faria a seguir. Se a resposta não for uma das linhas da fila ou das zonas, o relatório falhou.
-- Pergunta que ficou da Fase 10 (valeria a pena perguntar só nas regras validadas? ver secção 12 de `rastro-resultados-fase10.md`): **o `bella-nina` só tem 3 regras validadas, pouco para responder**. Só se responde depois de validar uma parte substancial das regras ou noutro repositório; até lá, o relatório regista quantas regras validadas existem como pré-condição.
+- Pergunta que ficou da Fase 10 (valeria a pena perguntar só nas regras validadas? ver secção 12 de `rastro-resultados-fase10.md`): **o `bella-beauty` só tem 3 regras validadas, pouco para responder**. Só se responde depois de validar uma parte substancial das regras ou noutro repositório; até lá, o relatório regista quantas regras validadas existem como pré-condição.
 
 ## 10. Plano de implementação
 
@@ -269,6 +269,6 @@ Ordem: 11.1 primeiro porque já dá valor sem tocar em esquema nenhum; 11.2 e 11
 
 **Ainda em aberto**
 
-- **Limites:** "amostra pequena" a menos de 10, janela de 30 dias e profundidade 2 das zonas são palpites; ajustar com dados reais. No `bella-nina` quase tudo na janela vai ser "amostra pequena" (4 propostas, 6 revisões).
-- **Fila de revisão:** o peso dado ao número de chamadores como proxy de importância é uma hipótese. No `bella-nina` 24 das 27 regras estão por validar, por isso a fila será dominada pelo critério "sem porquê"; comparar com a escolha de uma pessoa quando houver mais regras validadas.
+- **Limites:** "amostra pequena" a menos de 10, janela de 30 dias e profundidade 2 das zonas são palpites; ajustar com dados reais. No `bella-beauty` quase tudo na janela vai ser "amostra pequena" (4 propostas, 6 revisões).
+- **Fila de revisão:** o peso dado ao número de chamadores como proxy de importância é uma hipótese. No `bella-beauty` 24 das 27 regras estão por validar, por isso a fila será dominada pelo critério "sem porquê"; comparar com a escolha de uma pessoa quando houver mais regras validadas.
 - **Backfill de `merged_pr_number`:** preencher o histórico a partir de `pr_analyses` cobre só os PRs analisados; saber se vale a pena um preenchimento mais completo (listar os PRs integrados no GitHub) ou aceitar `n/a` para o passado.

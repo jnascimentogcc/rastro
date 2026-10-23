@@ -1,6 +1,6 @@
-# Block to add to the shared Caddyfile (azmt/deploy/Caddyfile), next to the Radar one.
+# Block to add to the Caddyfile of the Caddy that already serves your other sites. Replace the domain.
 # Only what the GitHub App and the CLI need is public; /docs and /openapi.json are not.
-rastro.karpaai.com {
+rastro.example.com {
 	header Strict-Transport-Security "max-age=31536000"
 
 	@public path /webhooks/github /health /v1/*
